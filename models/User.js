@@ -100,5 +100,6 @@ UserSchema.pre('save', function (next) {
     next();
 });
 
-module.exports = mongoose.model('User', UserSchema);
-module.exports.BAR_COUNCILS = BAR_COUNCILS;
+const UserModel = mongoose.model('User', UserSchema);
+UserModel.BAR_COUNCILS = BAR_COUNCILS;
+module.exports = UserModel;
