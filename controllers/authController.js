@@ -3,7 +3,7 @@ const User       = require('../models/User');
 const Otp        = require('../models/Otp');
 const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
-const { getFileUrl } = require('../middleware/uploadMiddleware');
+
 
 // ── Helper: sign JWT ──────────────────────────────────────────
 function signToken(userId) {
