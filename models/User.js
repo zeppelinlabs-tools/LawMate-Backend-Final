@@ -86,20 +86,23 @@ UserSchema.pre('save', function (next) {
     if (this.isModified('username') && this.username) {
         this.username = this.username.toLowerCase().trim();
 
-        if (/\s/.test(this.username))
-            return next(new Error('Username must not contain spaces.'));
+        if (/\s/.test(this.username)) {
+            const err = new Error('Username must not contain spaces.');
+            return next(err);
+        }
 
         const hasLetter = /[a-z]/.test(this.username);
         const hasNumber = /[0-9]/.test(this.username);
-        if (!hasLetter || !hasNumber)
-            return next(new Error('Username must contain both letters and numbers (e.g. ahmed_99, ali.2024).'));
+        if (!hasLetter || !hasNumber) {
+            return next(new Error('Username must contain both letters and numbers.'));
+        }
 
-        if (!/^[a-z0-9_.@]+$/.test(this.username))
-            return next(new Error('Username may only contain letters, numbers, underscores (_), periods (.), and @ symbols.'));
+        if (!/^[a-z0-9_.@]+$/.test(this.username)) {
+            return next(new Error('Username may only contain letters, numbers, underscores, periods, and @ symbols.'));
+        }
     }
-    next();
+    return next();
 });
-
 const UserModel = mongoose.model('User', UserSchema);
 UserModel.BAR_COUNCILS = BAR_COUNCILS;
 module.exports = UserModel;
