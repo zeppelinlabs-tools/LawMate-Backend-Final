@@ -113,9 +113,9 @@ exports.register = async (req, res) => {
         const isActive      = !['lawyer', 'social_worker'].includes(userRole);
 
         // ── File upload paths (lawyers & social workers) ──────
-        const barCouncilCardUrl  = getFileUrl(req, 'barCouncilCard');
-        const cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack');
-        const ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration');
+       const barCouncilCardUrl  = '';
+        const cnicFrontBackUrl   = '';
+       const ngoRegistrationUrl = '';
 
         // ── Bar council enum validation for lawyers ───────────
         const { BAR_COUNCILS } = require('../models/User');
