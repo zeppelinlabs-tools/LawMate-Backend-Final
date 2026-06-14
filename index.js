@@ -1,0 +1,63 @@
+require('dotenv').config();
+const express   = require('express');
+const cors      = require('cors');
+const path      = require('path');
+const connectDB = require('./config/database');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// ── Models ────────────────────────────────────────────────────
+require('./models/User');
+require('./models/LawCategory');
+require('./models/Law');
+require('./models/Post');
+require('./models/Appointment');
+require('./models/Notification');
+require('./models/Document');
+require('./models/ChatMessage');
+require('./models/ScrapedLaw');
+require('./models/LegalCase');
+require('./models/Ngo');
+require('./models/CaseEngagement');
+require('./models/Otp');
+require('./models/ChatSession');
+
+// ── Routes ────────────────────────────────────────────────────
+app.use('/api/auth',                           require('./routes/auth'));
+app.use('/api/laws',                           require('./routes/law'));
+app.use('/api/lawyers',                        require('./routes/lawyers'));
+app.use('/api/feed',                           require('./routes/feed'));
+app.use('/api/appointments',                   require('./routes/appointments'));
+app.use('/api/chat',                           require('./routes/chat'));
+app.use('/api/documents',                      require('./routes/documents'));
+app.use('/api/notifications',                  require('./routes/notifications'));
+app.use('/api/scraped-laws',                   require('./routes/scrapedLaws'));
+app.use('/api/legal-cases',                    require('./routes/legalCases'));
+app.use('/api/ngos',                           require('./routes/ngos'));
+app.use('/api/engagements',                    require('./routes/engagements'));
+app.use('/api/users/notification-preferences', require('./routes/userPreferences'));
+
+// ── Static files ──────────────────────────────────────────────
+app.use('/documents', express.static(path.join(__dirname, 'uploads', 'documents')));
+
+// ── Health check ──────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok', msg: 'LawMate API is running' }));
+
+const PORT = process.env.PORT || 4000;
+
+connectDB().then(() => {
+    app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
+        try {
+            const { startReminderCron } = require('./services/reminderCronService');
+            startReminderCron();
+        } catch (e) {
+            console.warn('⚠️  Reminder cron not started:', e.message);
+        }
+    });
+}).catch(err => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+});
