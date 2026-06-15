@@ -45,7 +45,7 @@ async function sendOtp(method, destination, code) {
 }
 
 // ── Helper: Global Error Handler ─────────────────────────────
-function handleSaveError(err, res, next) {
+function handleSaveError(err, res) {
     if (err.code === 11000) {
         const field = Object.keys(err.keyPattern || {})[0] || 'field';
         if (field === 'username') return res.status(409).json({ msg: 'Username is already taken.' });
@@ -59,7 +59,7 @@ function handleSaveError(err, res, next) {
 // ─────────────────────────────────────────────────────────────
 // 1. REGISTER
 // ─────────────────────────────────────────────────────────────
-exports.register = async (req, res, next) => {
+exports.register = async (req, res) => {
     try {
         const {
             firstName, lastName, email, password, role, phone, username,
@@ -95,7 +95,6 @@ exports.register = async (req, res, next) => {
         const isVerified = !['lawyer', 'social_worker'].includes(userRole);
         const isActive   = !['lawyer', 'social_worker'].includes(userRole);
 
-        // Manage file uploads dynamically based on roles
         let barCouncilCardUrl  = '';
         let cnicFrontBackUrl   = '';
         let ngoRegistrationUrl = '';
@@ -182,14 +181,14 @@ exports.register = async (req, res, next) => {
         });
 
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 2. VERIFY OTP
 // ─────────────────────────────────────────────────────────────
-exports.verifyOtp = async (req, res, next) => {
+exports.verifyOtp = async (req, res) => {
     try {
         const { userId, code } = req.body;
         if (!userId || !code)
@@ -226,14 +225,14 @@ exports.verifyOtp = async (req, res, next) => {
             user
         });
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 3. RESEND OTP
 // ─────────────────────────────────────────────────────────────
-exports.resendOtp = async (req, res, next) => {
+exports.resendOtp = async (req, res) => {
     try {
         const { userId } = req.body;
         if (!userId) return res.status(400).json({ msg: 'userId is required.' });
@@ -268,14 +267,14 @@ exports.resendOtp = async (req, res, next) => {
             ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode })
         });
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 4. LOGIN
 // ─────────────────────────────────────────────────────────────
-exports.login = async (req, res, next) => {
+exports.login = async (req, res) => {
     const { email, password, role } = req.body;
     try {
         if (!email || !password)
@@ -295,27 +294,27 @@ exports.login = async (req, res, next) => {
 
         return res.json({ token, role: user.role, user: userObj });
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 5. GET CURRENT USER (ME)
 // ─────────────────────────────────────────────────────────────
-exports.me = async (req, res, next) => {
+exports.me = async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('-password');
         if (!user) return res.status(404).json({ msg: 'User not found.' });
         return res.json(user);
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 6. GOOGLE SYNC
 // ─────────────────────────────────────────────────────────────
-exports.googleSync = async (req, res, next) => {
+exports.googleSync = async (req, res) => {
     const { email, firstName, lastName, picture } = req.body;
     try {
         if (!email) return res.status(400).json({ msg: 'Email is required for Google sync.' });
@@ -345,14 +344,14 @@ exports.googleSync = async (req, res, next) => {
             }
         });
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 7. UPDATE PROFILE
 // ─────────────────────────────────────────────────────────────
-exports.updateProfile = async (req, res, next) => {
+exports.updateProfile = async (req, res) => {
     try {
         const userId = req.user.id;
 
@@ -391,13 +390,37 @@ exports.updateProfile = async (req, res, next) => {
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             { $set: updateData },
-            { new: true, runValidators: true }
+            { new: true }
         ).select('-password');
 
         if (!updatedUser) return res.status(404).json({ msg: 'User not found.' });
         return res.json({ success: true, user: updatedUser });
 
     } catch (err) {
-        return handleSaveError(err, res, next);
+        return handleSaveError(err, res);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// 8. CHANGE PASSWORD
+// ─────────────────────────────────────────────────────────────
+exports.changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword)
+            return res.status(400).json({ msg: 'Current and new password are required.' });
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: 'User not found.' });
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) return res.status(400).json({ msg: 'Current password is incorrect.' });
+
+        user.password = await bcrypt.hash(newPassword, 10);
+        await user.save();
+
+        return res.json({ success: true, msg: 'Password changed successfully.' });
+    } catch (err) {
+        return handleSaveError(err, res);
     }
 };
