@@ -12,5 +12,7 @@ router.get ('/me',              auth, authController.me);
 router.put ('/update-profile',  auth, authController.updateProfile);
 router.put ('/profile',         auth, authController.updateProfile);
 router.put('/change-password', auth, authController.changePassword);
+router.post('/register/lawyer', authController.register);
+router.post('/register/social-worker', authController.register);
 
 module.exports = router;
