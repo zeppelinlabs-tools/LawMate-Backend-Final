@@ -12,18 +12,18 @@ const BAR_COUNCILS = [
 ];
 
 const UserSchema = new mongoose.Schema({
-    name:             { type: String, required: true },
-    firstName:        { type: String, default: '' },
-    lastName:         { type: String, default: '' },
-    username:         { type: String, required: true, unique: true, trim: true },
-    email:            { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password:         { type: String, required: true },
-    phone:            { type: String, default: '' },
-    profilePic:       { type: String, default: '' },
-    dob:              { type: String, default: '' },
-    gender:           { type: String, default: '' },
-    city:             { type: String, default: '' },
-    bio:              { type: String, default: '' },
+    name:              { type: String, required: true },
+    firstName:         { type: String, default: '' },
+    lastName:          { type: String, default: '' },
+    username:          { type: String, required: true, unique: true, trim: true },
+    email:             { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password:          { type: String, required: true },
+    phone:             { type: String, default: '' },
+    profilePic:        { type: String, default: '' },
+    dob:               { type: String, default: '' },
+    gender:            { type: String, default: '' },
+    city:              { type: String, default: '' },
+    bio:               { type: String, default: '' },
     role: {
         type:    String,
         enum:    ['client', 'lawyer', 'admin', 'social_worker', 'user'],
@@ -58,13 +58,18 @@ const UserSchema = new mongoose.Schema({
     createdAt:           { type: Date, default: Date.now }
 });
 
+// FIXED: Converted middleware to standard synchronous execution assignment block 
+// to prevent callback evaluation crashes in production deployment microservices
 UserSchema.pre('save', function (next) {
     if (this.isModified('username') && this.username) {
         this.username = this.username.toLowerCase().trim();
     }
-    next();
+    if (typeof next === 'function') {
+        return next();
+    }
 });
 
 const UserModel = mongoose.model('User', UserSchema);
 UserModel.BAR_COUNCILS = BAR_COUNCILS;
+
 module.exports = UserModel;
