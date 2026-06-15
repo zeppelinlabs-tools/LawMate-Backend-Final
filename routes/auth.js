@@ -11,5 +11,6 @@ router.post('/resend-otp',      authController.resendOtp);
 router.get ('/me',              auth, authController.me);
 router.put ('/update-profile',  auth, authController.updateProfile);
 router.put ('/profile',         auth, authController.updateProfile);
+router.put('/change-password', auth, authController.changePassword);
 
 module.exports = router;
