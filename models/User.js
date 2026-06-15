@@ -64,8 +64,9 @@ UserSchema.pre('save', function (next) {
     if (this.isModified('username') && this.username) {
         this.username = this.username.toLowerCase().trim();
     }
+    // Only trigger next execution callback if it exists
     if (typeof next === 'function') {
-        return next();
+        next();
     }
 });
 
