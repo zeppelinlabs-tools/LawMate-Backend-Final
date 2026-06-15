@@ -3,7 +3,7 @@ const User       = require('../models/User');
 const Otp        = require('../models/Otp');
 const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
-
+const { getFileUrl } = require('../middleware/uploadMiddleware');
 
 // ── Helper: sign JWT ──────────────────────────────────────────
 function signToken(userId) {
@@ -33,15 +33,12 @@ function validateUsername(username) {
 
 // ── Helper: send OTP (mock — replace with real provider) ──────
 async function sendOtp(method, destination, code) {
-    // TODO: replace with real email (Nodemailer/SendGrid) or SMS (Twilio)
     console.log(`[OTP] Sending ${code} via ${method} to ${destination}`);
-    // In production:
-    // if (method === 'email') await emailService.send(destination, code);
-    // if (method === 'phone') await smsService.send(destination, code);
 }
 
 // ── Helper: surface save errors cleanly ──────────────────────
-function handleSaveError(err, res) {
+// Added 'next' parameter just in case it is invoked fallback-style
+function handleSaveError(err, res, next) {
     const usernameErrors = [
         'Username must not contain spaces',
         'Username must contain both letters',
@@ -58,16 +55,18 @@ function handleSaveError(err, res) {
         return res.status(409).json({ msg: `${field} is already taken.` });
     }
     console.error('[AuthController]', err.message);
-    res.status(500).send('Server error');
+    
+    // Safely check if next is a real function before calling it
+    if (typeof next === 'function') {
+        return next(err);
+    }
+    return res.status(500).send('Server error');
 }
 
 // ─────────────────────────────────────────────────────────────
 // 1. REGISTER
-// POST /api/auth/register
-// Supports file uploads for lawyers (barCouncilCard, cnicFrontBack)
-// and social workers (ngoRegistration).
 // ─────────────────────────────────────────────────────────────
-exports.register = async (req, res) => {
+exports.register = async (req, res, next) => { // Added 'next' here
     try {
         const {
             firstName, lastName, email, password, role, phone, username,
@@ -76,79 +75,64 @@ exports.register = async (req, res) => {
             workType, organization, fee, helpedCount, verificationMethod
         } = req.body;
 
-        // ── Required fields ───────────────────────────────────
         if (!email || !password)
             return res.status(400).json({ msg: 'Email and password are required.' });
 
-        // ── Username validation ───────────────────────────────
         const usernameError = validateUsername(username);
         if (usernameError) return res.status(400).json({ msg: usernameError });
 
         const normalizedUsername = username.toLowerCase().trim();
 
-        // ── Global username uniqueness check ──────────────────
         const existingUsername = await User.findOne({ username: normalizedUsername });
         if (existingUsername)
             return res.status(409).json({ msg: 'Username is already taken. Please choose a different one.' });
 
-        // ── Email uniqueness check ────────────────────────────
         const existingEmail = await User.findOne({ email: email.toLowerCase().trim() });
         if (existingEmail)
             return res.status(400).json({ msg: 'An account with this email already exists.' });
 
-        // ── Name validation ───────────────────────────────────
         const cleanFirst = (firstName || '').trim();
         const cleanLast  = (lastName  || '').trim();
         if (!cleanFirst)
             return res.status(400).json({ msg: 'First name is required.' });
 
         const fullName = `${cleanFirst} ${cleanLast}`.trim();
-
-        // ── Hash password ─────────────────────────────────────
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // ── Role-based verification defaults ─────────────────
         const userRole      = role || 'client';
-        const isVerified    = !['lawyer', 'social_worker'].includes(userRole); // clients verified immediately
+        const isVerified    = !['lawyer', 'social_worker'].includes(userRole);
         const isActive      = !['lawyer', 'social_worker'].includes(userRole);
 
-        // ── File upload paths (lawyers & social workers) ──────
-       const barCouncilCardUrl  = '';
-        const cnicFrontBackUrl   = '';
-       const ngoRegistrationUrl = '';
+        const barCouncilCardUrl  = getFileUrl(req, 'barCouncilCard');
+        const cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack');
+        const ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration');
 
-        // ── Bar council enum validation for lawyers ───────────
-        const { BAR_COUNCILS } = require('../models/User');
-        if (userRole === 'lawyer' && barCouncil && !BAR_COUNCILS.includes(barCouncil)) {
+        // Safer way to access BAR_COUNCILS constant from model
+        if (userRole === 'lawyer' && barCouncil && User.BAR_COUNCILS && !User.BAR_COUNCILS.includes(barCouncil)) {
             return res.status(400).json({
-                msg: `Invalid bar council. Must be one of: ${BAR_COUNCILS.join(', ')}`
+                msg: `Invalid bar council. Must be one of: ${User.BAR_COUNCILS.join(', ')}`
             });
         }
 
-        // ── Create user ───────────────────────────────────────
         const user = new User({
-            name:             fullName,
-            firstName:        cleanFirst,
-            lastName:         cleanLast,
-            username:         normalizedUsername,
-            email:            email.toLowerCase().trim(),
-            password:         hashedPassword,
-            role:             userRole,
-            phone:            phone            || '',
-            dob:              dob              || '',
-            gender:           gender           || '',
-            city:             city             || '',
-            bio:              bio              || '',
-            languages:        Array.isArray(languages) ? languages : [],
-            isAvailable:      isAvailable !== undefined ? isAvailable : true,
-
-            // Verification state
+            name:              fullName,
+            firstName:         cleanFirst,
+            lastName:          cleanLast,
+            username:          normalizedUsername,
+            email:             email.toLowerCase().trim(),
+            password:          hashedPassword,
+            role:              userRole,
+            phone:             phone            || '',
+            dob:               dob              || '',
+            gender:            gender           || '',
+            city:              city             || '',
+            bio:               bio              || '',
+            languages:         Array.isArray(languages) ? languages : [],
+            isAvailable:       isAvailable !== undefined ? isAvailable : true,
             isVerified,
             isActive,
             isAccountVerified:  false,
             verificationMethod: verificationMethod || 'email',
-
-            // Lawyer fields
             barNumber:          barNumber         || '',
             barCouncil:         barCouncil        || '',
             barCouncilCardUrl,
@@ -157,8 +141,6 @@ exports.register = async (req, res) => {
             yearsExp:           yearsExp          || 0,
             consultationFee:    consultationFee   || 0,
             casesHandled:       casesHandled      || 0,
-
-            // Social worker fields
             workType:           workType          || '',
             organization:       organization      || '',
             ngoRegistrationUrl,
@@ -168,12 +150,10 @@ exports.register = async (req, res) => {
 
         await user.save();
 
-        // ── Generate + send OTP ───────────────────────────────
         const otpCode  = generateOtp();
         const method   = verificationMethod || 'email';
         const dest     = method === 'phone' ? (phone || '') : email.toLowerCase().trim();
 
-        // Clear any existing OTPs for this user
         await Otp.deleteMany({ userId: user._id });
 
         await Otp.create({
@@ -182,17 +162,14 @@ exports.register = async (req, res) => {
             phone:     phone || '',
             code:      otpCode,
             method,
-            expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+            expiresAt: new Date(Date.now() + 15 * 60 * 1000)
         });
 
         await sendOtp(method, dest, otpCode);
 
-        // ── Return response with token (OTP sent for verification) ──
         const userObj = user.toObject();
         delete userObj.password;
 
-        // Issue token immediately so frontend works
-        // OTP is also sent for account verification
         const token = signToken(user._id);
 
         res.status(201).json({
@@ -202,46 +179,37 @@ exports.register = async (req, res) => {
             userId:  user._id,
             role:    user.role,
             otpSentTo: dest,
-            // In development — expose OTP so you can test without email/SMS setup
             ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode }),
             user:    userObj
         });
 
     } catch (err) {
-        return handleSaveError(err, res);
+        return handleSaveError(err, res, next); // Passed next down
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 2. VERIFY OTP
-// POST /api/auth/verify-otp
-// Body: { userId, code }
 // ─────────────────────────────────────────────────────────────
 exports.verifyOtp = async (req, res) => {
     try {
         const { userId, code } = req.body;
-
         if (!userId || !code)
             return res.status(400).json({ msg: 'userId and code are required.' });
 
         const otpRecord = await Otp.findOne({ userId, isUsed: false });
-
         if (!otpRecord)
             return res.status(404).json({ msg: 'No active OTP found. Please request a new one.' });
 
-        // Check expiry
         if (new Date() > otpRecord.expiresAt)
             return res.status(400).json({ msg: 'OTP has expired. Please request a new one.' });
 
-        // Check code
         if (otpRecord.code !== String(code).trim())
             return res.status(400).json({ msg: 'Invalid OTP code. Please try again.' });
 
-        // Mark OTP as used
         otpRecord.isUsed = true;
         await otpRecord.save();
 
-        // Mark user account as OTP-verified
         const user = await User.findByIdAndUpdate(
             userId,
             { isAccountVerified: true },
@@ -250,7 +218,6 @@ exports.verifyOtp = async (req, res) => {
 
         if (!user) return res.status(404).json({ msg: 'User not found.' });
 
-        // Issue JWT token
         const token = signToken(user._id);
 
         res.json({
@@ -260,7 +227,6 @@ exports.verifyOtp = async (req, res) => {
             role:    user.role,
             user
         });
-
     } catch (err) {
         console.error('[verifyOtp]', err.message);
         res.status(500).send('Server error');
@@ -269,8 +235,6 @@ exports.verifyOtp = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // 3. RESEND OTP
-// POST /api/auth/resend-otp
-// Body: { userId }
 // ─────────────────────────────────────────────────────────────
 exports.resendOtp = async (req, res) => {
     try {
@@ -283,10 +247,8 @@ exports.resendOtp = async (req, res) => {
         if (user.isAccountVerified)
             return res.status(400).json({ msg: 'Account is already verified.' });
 
-        // Clear all existing OTPs
         await Otp.deleteMany({ userId });
 
-        // Generate new OTP
         const otpCode = generateOtp();
         const method  = user.verificationMethod || 'email';
         const dest    = method === 'phone' ? (user.phone || '') : user.email;
@@ -297,7 +259,7 @@ exports.resendOtp = async (req, res) => {
             phone:     user.phone || '',
             code:      otpCode,
             method,
-            expiresAt: new Date(Date.now() + 15 * 60 * 1000) // fresh 15 minutes
+            expiresAt: new Date(Date.now() + 15 * 60 * 1000)
         });
 
         await sendOtp(method, dest, otpCode);
@@ -308,7 +270,6 @@ exports.resendOtp = async (req, res) => {
             otpSentTo: dest,
             ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode })
         });
-
     } catch (err) {
         console.error('[resendOtp]', err.message);
         res.status(500).send('Server error');
@@ -317,7 +278,6 @@ exports.resendOtp = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // 4. LOGIN
-// POST /api/auth/login
 // ─────────────────────────────────────────────────────────────
 exports.login = async (req, res) => {
     const { email, password, role } = req.body;
@@ -346,7 +306,6 @@ exports.login = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // 5. GET CURRENT USER (ME)
-// GET /api/auth/me
 // ─────────────────────────────────────────────────────────────
 exports.me = async (req, res) => {
     try {
@@ -361,7 +320,6 @@ exports.me = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // 6. GOOGLE SYNC
-// POST /api/auth/google-sync
 // ─────────────────────────────────────────────────────────────
 exports.googleSync = async (req, res) => {
     const { email, firstName, lastName, picture } = req.body;
@@ -400,9 +358,8 @@ exports.googleSync = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // 7. UPDATE PROFILE
-// PUT /api/auth/update-profile
 // ─────────────────────────────────────────────────────────────
-exports.updateProfile = async (req, res) => {
+exports.updateProfile = async (req, res, next) => { // Added 'next' here
     try {
         const userId = req.user.id;
 
@@ -450,6 +407,6 @@ exports.updateProfile = async (req, res) => {
         res.json({ success: true, user: updatedUser });
 
     } catch (err) {
-        return handleSaveError(err, res);
+        return handleSaveError(err, res, next); // Passed next down
     }
 };
