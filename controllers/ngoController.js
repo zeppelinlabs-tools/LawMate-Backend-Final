@@ -20,8 +20,8 @@ exports.getNgos = async (req, res) => {
 // ── GET /api/ngos/:id ─────────────────────────────────────────
 exports.getNgo = async (req, res) => {
     try {
-        const ngo = await Ngo.findById(req.params.id);
-        if (!ngo) return res.status(404).json({ msg: 'NGO not found' });
+       // NGO data is from frontend mock — skip MongoDB lookup
+       const ngoName = req.body.ngoName || ngoId || 'Unknown NGO';
         res.json(ngo);
     } catch (err) {
         console.error(err.message);
