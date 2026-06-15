@@ -3,7 +3,15 @@ const User       = require('../models/User');
 const Otp        = require('../models/Otp');
 const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
-const { getFileUrl } = require('../middleware/uploadMiddleware');
+
+// Safely require the upload middleware utility
+let getFileUrl;
+try {
+    const uploadMiddleware = require('../middleware/uploadMiddleware');
+    getFileUrl = uploadMiddleware.getFileUrl;
+} catch (e) {
+    console.error("[Auth Setup] uploadMiddleware import skipped:", e.message);
+}
 
 // ── Helper: sign JWT ──────────────────────────────────────────
 function signToken(userId) {
@@ -31,42 +39,27 @@ function validateUsername(username) {
     return null;
 }
 
-// ── Helper: send OTP (mock — replace with real provider) ──────
+// ── Helper: send OTP ─────────────────────────────────────────
 async function sendOtp(method, destination, code) {
     console.log(`[OTP] Sending ${code} via ${method} to ${destination}`);
 }
 
-// ── Helper: surface save errors cleanly ──────────────────────
-// Added 'next' parameter just in case it is invoked fallback-style
+// ── Helper: Global Error Handler ─────────────────────────────
 function handleSaveError(err, res, next) {
-    const usernameErrors = [
-        'Username must not contain spaces',
-        'Username must contain both letters',
-        'Username may only contain letters',
-        'Username must contain at least'
-    ];
-    for (const msg of usernameErrors) {
-        if (err.message?.includes(msg)) return res.status(400).json({ msg: err.message });
-    }
     if (err.code === 11000) {
         const field = Object.keys(err.keyPattern || {})[0] || 'field';
         if (field === 'username') return res.status(409).json({ msg: 'Username is already taken.' });
         if (field === 'email')    return res.status(409).json({ msg: 'An account with this email already exists.' });
         return res.status(409).json({ msg: `${field} is already taken.` });
     }
-    console.error('[AuthController]', err.message);
-    
-    // Safely check if next is a real function before calling it
-    if (typeof next === 'function') {
-        return next(err);
-    }
-    return res.status(500).send('Server error');
+    console.error('[Auth Error Catch]', err);
+    return res.status(500).json({ success: false, msg: 'Internal Server Error', error: err.message });
 }
 
 // ─────────────────────────────────────────────────────────────
 // 1. REGISTER
 // ─────────────────────────────────────────────────────────────
-exports.register = async (req, res, next) => { // Added 'next' here
+exports.register = async (req, res, next) => {
     try {
         const {
             firstName, lastName, email, password, role, phone, username,
@@ -85,7 +78,7 @@ exports.register = async (req, res, next) => { // Added 'next' here
 
         const existingUsername = await User.findOne({ username: normalizedUsername });
         if (existingUsername)
-            return res.status(409).json({ msg: 'Username is already taken. Please choose a different one.' });
+            return res.status(409).json({ msg: 'Username is already taken.' });
 
         const existingEmail = await User.findOne({ email: email.toLowerCase().trim() });
         if (existingEmail)
@@ -93,25 +86,30 @@ exports.register = async (req, res, next) => { // Added 'next' here
 
         const cleanFirst = (firstName || '').trim();
         const cleanLast  = (lastName  || '').trim();
-        if (!cleanFirst)
-            return res.status(400).json({ msg: 'First name is required.' });
+        if (!cleanFirst) return res.status(400).json({ msg: 'First name is required.' });
 
         const fullName = `${cleanFirst} ${cleanLast}`.trim();
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        const userRole      = role || 'client';
-        const isVerified    = !['lawyer', 'social_worker'].includes(userRole);
-        const isActive      = !['lawyer', 'social_worker'].includes(userRole);
+        const userRole   = role || 'client';
+        const isVerified = !['lawyer', 'social_worker'].includes(userRole);
+        const isActive   = !['lawyer', 'social_worker'].includes(userRole);
 
-        const barCouncilCardUrl  = getFileUrl(req, 'barCouncilCard');
-        const cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack');
-        const ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration');
+        // Manage file uploads dynamically based on roles
+        let barCouncilCardUrl  = '';
+        let cnicFrontBackUrl   = '';
+        let ngoRegistrationUrl = '';
 
-        // Safer way to access BAR_COUNCILS constant from model
-        if (userRole === 'lawyer' && barCouncil && User.BAR_COUNCILS && !User.BAR_COUNCILS.includes(barCouncil)) {
-            return res.status(400).json({
-                msg: `Invalid bar council. Must be one of: ${User.BAR_COUNCILS.join(', ')}`
-            });
+        if (typeof getFileUrl === 'function' && req.files) {
+            try {
+                if (userRole === 'lawyer') {
+                    barCouncilCardUrl = getFileUrl(req, 'barCouncilCard') || '';
+                }
+                cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack') || '';
+                ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration') || '';
+            } catch (fileErr) {
+                console.error("[File Utility Error Handled]", fileErr.message);
+            }
         }
 
         const user = new User({
@@ -131,7 +129,7 @@ exports.register = async (req, res, next) => { // Added 'next' here
             isAvailable:       isAvailable !== undefined ? isAvailable : true,
             isVerified,
             isActive,
-            isAccountVerified:  false,
+            isAccountVerified: false,
             verificationMethod: verificationMethod || 'email',
             barNumber:          barNumber         || '',
             barCouncil:         barCouncil        || '',
@@ -172,9 +170,9 @@ exports.register = async (req, res, next) => { // Added 'next' here
 
         const token = signToken(user._id);
 
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
-            msg:     `Registration successful. A 6-digit OTP has been sent to your ${method}. Please verify to activate your account.`,
+            msg:     `Registration successful. An OTP has been sent to your ${method}.`,
             token,
             userId:  user._id,
             role:    user.role,
@@ -184,14 +182,14 @@ exports.register = async (req, res, next) => { // Added 'next' here
         });
 
     } catch (err) {
-        return handleSaveError(err, res, next); // Passed next down
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 2. VERIFY OTP
 // ─────────────────────────────────────────────────────────────
-exports.verifyOtp = async (req, res) => {
+exports.verifyOtp = async (req, res, next) => {
     try {
         const { userId, code } = req.body;
         if (!userId || !code)
@@ -220,7 +218,7 @@ exports.verifyOtp = async (req, res) => {
 
         const token = signToken(user._id);
 
-        res.json({
+        return res.json({
             success: true,
             msg:     'Account verified successfully.',
             token,
@@ -228,15 +226,14 @@ exports.verifyOtp = async (req, res) => {
             user
         });
     } catch (err) {
-        console.error('[verifyOtp]', err.message);
-        res.status(500).send('Server error');
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 3. RESEND OTP
 // ─────────────────────────────────────────────────────────────
-exports.resendOtp = async (req, res) => {
+exports.resendOtp = async (req, res, next) => {
     try {
         const { userId } = req.body;
         if (!userId) return res.status(400).json({ msg: 'userId is required.' });
@@ -264,22 +261,21 @@ exports.resendOtp = async (req, res) => {
 
         await sendOtp(method, dest, otpCode);
 
-        res.json({
+        return res.json({
             success:   true,
-            msg:       `A new OTP has been sent to your ${method}. It expires in 15 minutes.`,
+            msg:       `A new OTP has been sent to your ${method}.`,
             otpSentTo: dest,
             ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode })
         });
     } catch (err) {
-        console.error('[resendOtp]', err.message);
-        res.status(500).send('Server error');
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 4. LOGIN
 // ─────────────────────────────────────────────────────────────
-exports.login = async (req, res) => {
+exports.login = async (req, res, next) => {
     const { email, password, role } = req.body;
     try {
         if (!email || !password)
@@ -297,31 +293,29 @@ exports.login = async (req, res) => {
         const userObj = user.toObject();
         delete userObj.password;
 
-        res.json({ token, role: user.role, user: userObj });
+        return res.json({ token, role: user.role, user: userObj });
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server error');
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 5. GET CURRENT USER (ME)
 // ─────────────────────────────────────────────────────────────
-exports.me = async (req, res) => {
+exports.me = async (req, res, next) => {
     try {
         const user = await User.findById(req.user.id).select('-password');
         if (!user) return res.status(404).json({ msg: 'User not found.' });
-        res.json(user);
+        return res.json(user);
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server error');
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 6. GOOGLE SYNC
 // ─────────────────────────────────────────────────────────────
-exports.googleSync = async (req, res) => {
+exports.googleSync = async (req, res, next) => {
     const { email, firstName, lastName, picture } = req.body;
     try {
         if (!email) return res.status(400).json({ msg: 'Email is required for Google sync.' });
@@ -342,7 +336,7 @@ exports.googleSync = async (req, res) => {
         return res.status(200).json({
             success:         true,
             needsOnboarding: true,
-            msg:             'Email not registered. Please complete your profile to finish signup.',
+            msg:             'Email not registered. Please complete profile configuration.',
             googleData: {
                 firstName: (firstName || '').trim(),
                 lastName:  (lastName  || '').trim(),
@@ -351,15 +345,14 @@ exports.googleSync = async (req, res) => {
             }
         });
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server error');
+        return handleSaveError(err, res, next);
     }
 };
 
 // ─────────────────────────────────────────────────────────────
 // 7. UPDATE PROFILE
 // ─────────────────────────────────────────────────────────────
-exports.updateProfile = async (req, res, next) => { // Added 'next' here
+exports.updateProfile = async (req, res, next) => {
     try {
         const userId = req.user.id;
 
@@ -370,9 +363,7 @@ exports.updateProfile = async (req, res, next) => { // Added 'next' here
             const normalizedUsername = req.body.username.toLowerCase().trim();
             const collision = await User.findOne({ username: normalizedUsername, _id: { $ne: userId } });
             if (collision) {
-                return res.status(409).json({
-                    error: 'Warning: Username matches an active user account. You must provide a completely unique variation before updates can be authorized.'
-                });
+                return res.status(409).json({ msg: 'Username matches an active user account.' });
             }
             req.body.username = normalizedUsername;
         }
@@ -404,9 +395,9 @@ exports.updateProfile = async (req, res, next) => { // Added 'next' here
         ).select('-password');
 
         if (!updatedUser) return res.status(404).json({ msg: 'User not found.' });
-        res.json({ success: true, user: updatedUser });
+        return res.json({ success: true, user: updatedUser });
 
     } catch (err) {
-        return handleSaveError(err, res, next); // Passed next down
+        return handleSaveError(err, res, next);
     }
 };
