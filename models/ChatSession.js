@@ -24,7 +24,7 @@ const ChatSessionSchema = new mongoose.Schema({
 // Auto-update lastUpdated on save
 ChatSessionSchema.pre('save', function(next) {
     this.lastUpdated = Date.now();
-    next();
+    if (typeof next === 'function') next();
 });
 
 module.exports = mongoose.model('ChatSession', ChatSessionSchema);
