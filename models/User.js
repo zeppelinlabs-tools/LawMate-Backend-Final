@@ -60,14 +60,12 @@ const UserSchema = new mongoose.Schema({
 
 // FIXED: Converted middleware to standard synchronous execution assignment block 
 // to prevent callback evaluation crashes in production deployment microservices
-UserSchema.pre('save', function (next) {
+// Isme koi 'next' callback parameter nahi hai, isliye yeh kabhi crash nahi karega
+UserSchema.pre('save', function () {
     if (this.isModified('username') && this.username) {
         this.username = this.username.toLowerCase().trim();
     }
-    // Only trigger next execution callback if it exists
-    if (typeof next === 'function') {
-        next();
-    }
+    // Kisi next() ko call karne ki zaroorat nahi hai!
 });
 
 const UserModel = mongoose.model('User', UserSchema);
