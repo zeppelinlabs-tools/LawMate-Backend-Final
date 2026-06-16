@@ -47,7 +47,7 @@ const CaseEngagementSchema = new mongoose.Schema({
 
 CaseEngagementSchema.pre('save', function (next) {
     this.updatedAt = Date.now();
-    next();
+    if (typeof next === "function") next();
 });
 
 module.exports = mongoose.model('CaseEngagement', CaseEngagementSchema);
