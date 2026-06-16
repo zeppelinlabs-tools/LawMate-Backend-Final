@@ -467,3 +467,14 @@ exports.resetPassword = async (req, res) => {
         return res.json({ success: true, msg: 'Password reset successfully.' });
     } catch (err) { return handleSaveError(err, res); }
 };
+exports.searchUser = async (req, res) => {
+    try {
+        const { username } = req.query;
+        if (!username) return res.status(400).json({ msg: 'username is required' });
+        const user = await User.findOne({ username: username.toLowerCase().trim() }).select('-password');
+        if (!user) return res.status(404).json({ msg: 'No user found with this username' });
+        res.json({ success: true, user });
+    } catch (err) {
+        return handleSaveError(err, res);
+    }
+};
