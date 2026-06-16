@@ -91,7 +91,7 @@ exports.register = async (req, res) => {
         const fullName = `${cleanFirst} ${cleanLast}`.trim();
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        const userRole   = role || 'client';
+        const userRole   = (role === 'user') ? 'user' : (role || 'client');
         const isVerified = !['lawyer', 'social_worker'].includes(userRole);
         const isActive   = !['lawyer', 'social_worker'].includes(userRole);
 
@@ -285,7 +285,10 @@ exports.login = async (req, res) => {
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials.' });
-        if (role && user.role !== role)
+        // Treat 'user' and 'client' as same role
+        const normalizedRole = role === 'user' ? 'client' : role;
+        const normalizedUserRole = user.role === 'user' ? 'client' : user.role;
+        if (role && normalizedRole !== normalizedUserRole && normalizedRole !== user.role)
             return res.status(400).json({ msg: `Please login as ${user.role}.` });
 
         const token  = signToken(user._id);
