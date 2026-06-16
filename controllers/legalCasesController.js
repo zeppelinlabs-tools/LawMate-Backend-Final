@@ -44,6 +44,17 @@ exports.getCases = async (req, res) => {
 // FIX: Added required field validation with clear error messages
 exports.createCase = async (req, res) => {
     try {
+        // If clientId is a username string (not ObjectId), look up real user
+        if (req.body.clientId && !/^[0-9a-fA-F]{24}$/.test(String(req.body.clientId))) {
+            const found = await User.findOne({ username: String(req.body.clientId).toLowerCase().trim() });
+            if (found) {
+                req.body.clientId   = found._id;
+                req.body.clientName = `${found.firstName || ''} ${found.lastName || ''}`.trim() || found.username;
+            } else {
+                return res.status(404).json({ msg: `No user found with username: ${req.body.clientId}` });
+            }
+        }
+
         const {
             title, courtName, caseType, caseNumber, caseYear,
             biometricTrackingNumber, clientId, clientName
