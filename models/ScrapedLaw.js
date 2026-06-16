@@ -76,7 +76,7 @@ ScrapedLawSchema.index({ 'title.en': 'text', 'title.ur': 'text' });
 // Update `updatedAt` on save
 ScrapedLawSchema.pre('save', function (next) {
     this.updatedAt = Date.now();
-    next();
+    if (typeof next === "function") next();
 });
 
 module.exports = mongoose.model('ScrapedLaw', ScrapedLawSchema);
