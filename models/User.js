@@ -26,7 +26,7 @@ const UserSchema = new mongoose.Schema({
     bio:               { type: String, default: '' },
     role: {
         type:    String,
-        enum:    ['client', 'lawyer', 'admin', 'social_worker', 'user'],
+        enum:    ['client', 'lawyer', 'admin', 'social_worker'],
         default: 'client'
     },
     isVerified:          { type: Boolean, default: false },
