@@ -433,59 +433,37 @@ exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ msg: 'Email is required.' });
-
         const user = await User.findOne({ email: email.toLowerCase().trim() });
         if (!user) return res.status(404).json({ msg: 'No account found with this email.' });
-
         await Otp.deleteMany({ userId: user._id });
-
         const otpCode = generateOtp();
         await Otp.create({
-            userId:    user._id,
-            email:     user.email,
-            phone:     user.phone || '',
-            code:      otpCode,
-            method:    'email',
+            userId: user._id, email: user.email, phone: user.phone || '',
+            code: otpCode, method: 'email',
             expiresAt: new Date(Date.now() + 15 * 60 * 1000)
         });
-
         await sendOtp('email', user.email, otpCode);
-
         return res.json({
-            success:  true,
-            msg:      'Password reset OTP sent to your email.',
-            userId:   user._id,
+            success: true, msg: 'OTP sent to your email.',
+            userId: user._id,
             ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode })
         });
-    } catch (err) {
-        return handleSaveError(err, res);
-    }
+    } catch (err) { return handleSaveError(err, res); }
 };
 
-// ─────────────────────────────────────────────────────────────
-// 10. RESET PASSWORD
-// POST /api/auth/reset-password
-// Body: { userId, code, newPassword }
-// ─────────────────────────────────────────────────────────────
 exports.resetPassword = async (req, res) => {
     try {
         const { userId, code, newPassword } = req.body;
         if (!userId || !code || !newPassword)
             return res.status(400).json({ msg: 'userId, code and newPassword are required.' });
-
         const otpRecord = await Otp.findOne({ userId, isUsed: false });
-        if (!otpRecord) return res.status(404).json({ msg: 'No active OTP found. Please request a new one.' });
-        if (new Date() > otpRecord.expiresAt) return res.status(400).json({ msg: 'OTP has expired.' });
-        if (otpRecord.code !== String(code).trim()) return res.status(400).json({ msg: 'Invalid OTP code.' });
-
+        if (!otpRecord) return res.status(404).json({ msg: 'No active OTP found.' });
+        if (new Date() > otpRecord.expiresAt) return res.status(400).json({ msg: 'OTP expired.' });
+        if (otpRecord.code !== String(code).trim()) return res.status(400).json({ msg: 'Invalid OTP.' });
         otpRecord.isUsed = true;
         await otpRecord.save();
-
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await User.findByIdAndUpdate(userId, { password: hashedPassword });
-
-        return res.json({ success: true, msg: 'Password reset successfully. Please login with your new password.' });
-    } catch (err) {
-        return handleSaveError(err, res);
-    }
+        return res.json({ success: true, msg: 'Password reset successfully.' });
+    } catch (err) { return handleSaveError(err, res); }
 };
