@@ -16,5 +16,6 @@ router.post('/register/lawyer', authController.register);
 router.post('/register/social-worker', authController.register);
 router.post('/forgot-password',        authController.forgotPassword);
 router.post('/reset-password',         authController.resetPassword);
+router.get('/search-user', auth, authController.searchUser);
 
 module.exports = router;
