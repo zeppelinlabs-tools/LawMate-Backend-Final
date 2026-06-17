@@ -20,5 +20,9 @@ const ChatMessageSchema = new mongoose.Schema({
         default: Date.now
     }
 });
-
+engagementId: { type: mongoose.Schema.Types.ObjectId, ref: 'CaseEngagement', default: null },
+attachmentUrl:  { type: String, default: '' },
+attachmentType: { type: String, default: '' },
+attachmentName: { type: String, default: '' },
+isRead:         { type: Boolean, default: false },
 module.exports = mongoose.model('ChatMessage', ChatMessageSchema);
