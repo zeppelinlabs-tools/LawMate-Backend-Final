@@ -24,5 +24,7 @@ router.put   ('/:id',            auth, ctrl.updateCase);
 router.delete('/:id',            auth, ctrl.deleteCase);
 router.post  ('/:id/timeline',   auth, ctrl.addTimelineEntry);
 router.post  ('/:id/vault',      auth, ctrl.addVaultDocument);
+router.post  ('/:id/share',      auth, ctrl.shareCase);
+router.delete('/:id/share',      auth, ctrl.unshareCase);
 
 module.exports = router;
