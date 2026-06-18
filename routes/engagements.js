@@ -31,5 +31,16 @@ router.post('/initialize-payment', auth, ctrl.initializePayment);
 router.post('/process-payment',    auth, ctrl.processPayment);
 router.post('/complete',           auth, ctrl.completeEngagement);
 router.get ('/',                   auth, ctrl.getMyEngagements);
+router.put('/toggle-call/:engagementId', auth, async (req, res) => {
+    try {
+        const eng = await CaseEngagement.findById(req.params.engagementId);
+        if (!eng) return res.status(404).json({ msg: 'Not found' });
+        eng.callEnabled = !eng.callEnabled;
+        await eng.save();
+        res.json({ success: true, callEnabled: eng.callEnabled });
+    } catch (err) {
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
 
 module.exports = router;
