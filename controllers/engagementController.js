@@ -85,10 +85,7 @@ exports.requestEngagement = async (req, res) => {
         }
 
         // Notify the professional
-        await saveNotification(
-            professionalId,
-            `You have a new connection request from a client. Engagement ID: ${engagement._id}`
-        );
+        await Notification.create({ userId: professionalId, type: 'connection', title: 'New Connection Request', message: `A client wants to connect with you.`, actionId: engagement._id.toString(), isRead: false });
 
         res.status(201).json({
             success: true,
@@ -136,10 +133,7 @@ exports.respondEngagement = async (req, res) => {
             engagement.status = 'FREE_INTAKE';
             await engagement.save();
 
-            await saveNotification(
-                engagement.clientId,
-                'Your connection request has been accepted! You can now chat with your professional.'
-            );
+            await Notification.create({ userId: engagement.clientId, type: 'connection', title: 'Request Accepted!', message: 'Your connection request has been accepted. You can now chat.', isRead: false });
 
             return res.json({
                 success: true,
