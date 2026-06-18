@@ -27,7 +27,11 @@ exports.getCases = async (req, res) => {
             if (user.role === 'lawyer' || user.role === 'social_worker') {
                 query.lawyerId = user._id;
             } else {
-                query.clientId = user._id;
+                const cases = await LegalCase.find({
+                    $or: [{ clientId: user._id }, { sharedWithClients: user._id }]
+                }).sort({ createdAt: -1 });
+                const populated = await Promise.all(cases.map(populateCase));
+                return res.json(populated);
             }
         }
 
@@ -212,4 +216,38 @@ exports.addVaultDocument = async (req, res) => {
         console.error(err.message);
         res.status(500).send('Server error');
     }
+};
+
+exports.shareCase = async (req, res) => {
+    try {
+        const { clientId } = req.body;
+        if (!clientId) return res.status(400).json({ msg: 'clientId required' });
+        const legalCase = await LegalCase.findById(req.params.id);
+        if (!legalCase) return res.status(404).json({ msg: 'Case not found' });
+        if (legalCase.lawyerId.toString() !== req.user.id)
+            return res.status(403).json({ msg: 'Not authorized' });
+        if (!legalCase.sharedWithClients.map(id => id.toString()).includes(clientId)) {
+            legalCase.sharedWithClients.push(clientId);
+        }
+        legalCase.clientId = clientId;
+        legalCase.isShared = true;
+        await legalCase.save();
+        const Notification = require('../models/Notification');
+        await Notification.create({ userId: clientId, message: `A case has been shared with you: ${legalCase.title}`, isRead: false });
+        res.json({ success: true, case: legalCase });
+    } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
+};
+
+exports.unshareCase = async (req, res) => {
+    try {
+        const { clientId } = req.body;
+        const legalCase = await LegalCase.findById(req.params.id);
+        if (!legalCase) return res.status(404).json({ msg: 'Case not found' });
+        if (legalCase.lawyerId.toString() !== req.user.id)
+            return res.status(403).json({ msg: 'Not authorized' });
+        legalCase.sharedWithClients = legalCase.sharedWithClients.filter(id => id.toString() !== clientId);
+        if (legalCase.sharedWithClients.length === 0) legalCase.isShared = false;
+        await legalCase.save();
+        res.json({ success: true });
+    } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 };
