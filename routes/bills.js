@@ -27,7 +27,7 @@ router.post('/', auth, async (req, res) => {
             meetingTime: meetingTime || '', meetingType: meetingType || 'online', meetingAddress: meetingAddress || '',
         });
         await bill.save();
-        await Notification.create({ userId: clientId, message: `New bill: ${title} — PKR ${amount}`, isRead: false });
+        await Notification.create({ userId: clientId, type: 'bill', title: 'New Bill Received', message: `${title} — PKR ${amount}`, isRead: false });
         res.status(201).json({ success: true, bill });
     } catch (err) { res.status(500).json({ msg: 'Server error' }); }
 });
@@ -48,7 +48,7 @@ router.put('/:id/pay', auth, async (req, res) => {
                 time: bill.meetingTime, type: bill.meetingType, address: bill.meetingAddress, notes: bill.notes,
             });
         }
-        await Notification.create({ userId: bill.lawyerId, message: `Bill paid: ${bill.title} — PKR ${bill.amount}`, isRead: false });
+        await Notification.create({ userId: bill.lawyerId, type: 'bill', title: 'Bill Paid', message: `${bill.title} — PKR ${bill.amount} has been paid.`, isRead: false });
         res.json({ success: true, bill });
     } catch (err) { res.status(500).json({ msg: 'Server error' }); }
 });
