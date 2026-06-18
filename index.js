@@ -40,6 +40,8 @@ app.use('/api/notifications',                  require('./routes/notifications')
 app.use('/api/scraped-laws',                   require('./routes/scrapedLaws'));
 app.use('/api/legal-cases',                    require('./routes/legalCases'));
 app.use('/api/ngos',                           require('./routes/ngos'));
+app.use('/api/bills',                          require('./routes/bills'));
+app.use('/api/meetings',                       require('./routes/meetings'));
 app.use('/api/engagements',                    require('./routes/engagements'));
 app.use('/api/users/notification-preferences', require('./routes/userPreferences'));
 
