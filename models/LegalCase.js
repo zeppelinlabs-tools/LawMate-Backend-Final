@@ -36,13 +36,15 @@ const LegalCaseSchema = new mongoose.Schema({
     lawyerName:  { type: String, default: '' },
     clientId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     clientName:  { type: String, default: '' },
+    sharedWithClients: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    isShared:    { type: Boolean, default: false },
     createdAt:   { type: Date, default: Date.now },
     updatedAt:   { type: Date, default: Date.now }
 });
 
 LegalCaseSchema.pre('save', function (next) {
     this.updatedAt = Date.now();
-    next();
+    if (typeof next === 'function') next();
 });
 
 const LegalCase         = mongoose.model('LegalCase', LegalCaseSchema);
