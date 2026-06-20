@@ -55,6 +55,7 @@ const UserSchema = new mongoose.Schema({
     },
     withdrawableBalance: { type: Number, default: 0 },
     fcmToken:            { type: String, default: '' },
+    bookmarkedLaws:      [{ type: mongoose.Schema.Types.ObjectId, ref: 'Law' }],
     createdAt:           { type: Date, default: Date.now }
 });
 
