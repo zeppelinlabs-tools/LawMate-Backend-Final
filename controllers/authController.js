@@ -481,3 +481,43 @@ exports.searchUser = async (req, res) => {
         return handleSaveError(err, res);
     }
 };
+
+// ── Bookmarks: toggle add/remove a law from the user's bookmarkedLaws array ──
+exports.toggleBookmark = async (req, res) => {
+    try {
+        const { lawId } = req.params;
+        if (!lawId) return res.status(400).json({ msg: 'lawId is required' });
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+
+        const idx = user.bookmarkedLaws.findIndex(id => id.toString() === lawId);
+        let bookmarked;
+        if (idx === -1) {
+            user.bookmarkedLaws.push(lawId);
+            bookmarked = true;
+        } else {
+            user.bookmarkedLaws.splice(idx, 1);
+            bookmarked = false;
+        }
+        await user.save();
+        res.json({ success: true, bookmarked, bookmarkedLaws: user.bookmarkedLaws });
+    } catch (err) {
+        return handleSaveError(err, res);
+    }
+};
+
+// ── Bookmarks: get the user's populated bookmarked laws ──────────────────────
+exports.getBookmarks = async (req, res) => {
+    try {
+        const Law = require('../models/Law');
+        const user = await User.findById(req.user.id).select('bookmarkedLaws');
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+
+        const laws = await Law.find({ _id: { $in: user.bookmarkedLaws } })
+            .populate('categoryId');
+        res.json({ success: true, laws });
+    } catch (err) {
+        return handleSaveError(err, res);
+    }
+};
