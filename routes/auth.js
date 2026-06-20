@@ -17,5 +17,7 @@ router.post('/register/social-worker', authController.register);
 router.post('/forgot-password',        authController.forgotPassword);
 router.post('/reset-password',         authController.resetPassword);
 router.get('/search-user', auth, authController.searchUser);
+router.post('/bookmark/:lawId', auth, authController.toggleBookmark);
+router.get('/bookmarks',        auth, authController.getBookmarks);
 
 module.exports = router;
