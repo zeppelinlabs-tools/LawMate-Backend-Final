@@ -383,6 +383,18 @@ exports.updateProfile = async (req, res) => {
             if (req.body[field] !== undefined) updateData[field] = req.body[field];
         });
 
+        // notificationPreferences is a nested sub-document — merge field by field
+        // using dot-notation so a partial update (e.g. just {chatMessages:false})
+        // never wipes out the sibling preference flags.
+        if (req.body.notificationPreferences && typeof req.body.notificationPreferences === 'object') {
+            const npAllowed = ['chatMessages', 'connectionUpdates', 'appointmentReminders'];
+            npAllowed.forEach(key => {
+                if (req.body.notificationPreferences[key] !== undefined) {
+                    updateData[`notificationPreferences.${key}`] = req.body.notificationPreferences[key];
+                }
+            });
+        }
+
         if (updateData.firstName !== undefined || updateData.lastName !== undefined) {
             const existing = await User.findById(userId).select('firstName lastName name');
             const first = (updateData.firstName !== undefined ? updateData.firstName : existing.firstName || '').trim();
