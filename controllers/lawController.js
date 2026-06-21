@@ -16,14 +16,20 @@ exports.getCategories = async (req, res) => {
 // 2. GET ALL LAWS (With Optional Category Filter & Join)
 exports.getLaws = async (req, res) => {
   try {
-    const { categoryId } = req.query;
+    const { categoryId, region } = req.query;
     let queryClause = {};
-    
+
     // Agar query mein categoryId aati hai toh direct assignment
     if (categoryId) {
       queryClause.categoryId = categoryId;
     }
-    
+
+    // Region filter — "pakistan" means nationwide, so we don't filter at all
+    // (it should show every law, not just ones explicitly tagged "pakistan").
+    if (region && region !== 'pakistan') {
+      queryClause.region = region;
+    }
+
     // `.findAll({ where: ... , include: [...] })` is replaced by `.find(...)` and `.populate(...)`
     const laws = await Law.find(queryClause)
       .populate('categoryId'); // Assuming your Law schema has categoryId with `ref: 'LawCategory'`
