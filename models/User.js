@@ -56,6 +56,11 @@ const UserSchema = new mongoose.Schema({
     withdrawableBalance: { type: Number, default: 0 },
     fcmToken:            { type: String, default: '' },
     bookmarkedLaws:      [{ type: mongoose.Schema.Types.ObjectId, ref: 'Law' }],
+    notificationPreferences: {
+        chatMessages:          { type: Boolean, default: true },
+        connectionUpdates:     { type: Boolean, default: true },
+        appointmentReminders:  { type: Boolean, default: true },
+    },
     createdAt:           { type: Date, default: Date.now }
 });
 
