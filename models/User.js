@@ -35,9 +35,37 @@ const UserSchema = new mongoose.Schema({
     verificationMethod:  { type: String, enum: ['email', 'phone'], default: 'email' },
     barNumber:           { type: String, default: '' },
     barCouncil:          { type: String, default: '' },
-    barCouncilCardUrl:   { type: String, default: '' },
-    cnicFrontBackUrl:    { type: String, default: '' },
-    specialization:      { type: String, default: '' },
+    barCouncilCardUrl:   { type: String, default: '' }, // legacy combined field — kept for old records
+    cnicFrontBackUrl:    { type: String, default: '' }, // legacy combined field — kept for old records
+    specialization:      { type: String, default: '' }, // legacy free-text field — kept for old records
+
+    // ── Structured lawyer verification (5 separate documents) ──────────
+    provincialBarCouncil: {
+        type: String,
+        enum: ['', 'Punjab', 'Sindh', 'KP', 'Balochistan', 'Islamabad', 'AJK', 'Gilgit-Baltistan'],
+        default: ''
+    },
+    barRegistrationNumber: { type: String, default: '' },
+    cnicNumber:             { type: String, default: '' }, // stored unmasked, 13 digits only
+    licenseLevel:           { type: String, default: '' },
+    isGeneralPractice:      { type: Boolean, default: false },
+    areasOfPractice: {
+        type: [String],
+        enum: [
+            'Criminal Law', 'Civil Law', 'Family Law', 'Corporate Law',
+            'Property Law', 'Tax Law', 'Banking Law', 'Labor Law',
+            'Cyber Law', 'Constitutional Law', 'IP Law', 'Inheritance Law',
+            'Consumer Law', 'Immigration Law', 'Environmental Law'
+        ],
+        default: []
+    },
+    licenseCertificateUrl:  { type: String, default: '' },
+    cnicFrontUrl:           { type: String, default: '' },
+    cnicBackUrl:            { type: String, default: '' },
+    barCouncilFrontUrl:     { type: String, default: '' },
+    barCouncilBackUrl:      { type: String, default: '' },
+    isVerifiedProfile:      { type: Boolean, default: false },
+
     yearsExp:            { type: Number, default: 0 },
     consultationFee:     { type: Number, default: 0 },
     languages:           { type: [String], default: [] },
@@ -48,14 +76,9 @@ const UserSchema = new mongoose.Schema({
     ngoRegistrationUrl:  { type: String, default: '' },
     fee:                 { type: Number, default: 0 },
     helpedCount:         { type: Number, default: 0 },
-    notificationPreferences: {
-        chatMessages:         { type: Boolean, default: true },
-        connectionUpdates:    { type: Boolean, default: true },
-        appointmentReminders: { type: Boolean, default: true }
-    },
     withdrawableBalance: { type: Number, default: 0 },
     fcmToken:            { type: String, default: '' },
-    bookmarkedLaws:      [{ type: mongoose.Schema.Types.ObjectId, ref: 'Law' }],
+    bookmarkedLaws:      [{ type: mongoose.Schema.Types.ObjectId, ref: 'ScrapedLaw' }],
     notificationPreferences: {
         chatMessages:          { type: Boolean, default: true },
         connectionUpdates:     { type: Boolean, default: true },
