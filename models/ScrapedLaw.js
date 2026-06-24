@@ -42,6 +42,37 @@ const ScrapedLawSchema = new mongoose.Schema({
         ur: { type: String, default: '' }
     },
 
+    // Topic category — fixed taxonomy so TabBar filtering is reliable.
+    // 'uncategorized' is the default for laws scraped/enriched before this
+    // field existed; the backfill script (scripts/backfillLawCategories.js)
+    // assigns a real category to those.
+    category: {
+        type: String,
+        enum: [
+            'family', 'criminal', 'business', 'property', 'labor',
+            'tax', 'constitutional', 'consumer', 'cyber', 'environmental',
+            'civil', 'human_rights', 'uncategorized'
+        ],
+        default: 'uncategorized'
+    },
+
+    // Subject-matter category, distinct from `source` (which is the
+    // region/province). Assigned automatically by aiEnrichmentService during
+    // scraping (see controllers/scrapedLawController.js). This field was
+    // referenced throughout the controller (assignment, filtering, the
+    // /categories aggregation) but never actually declared on the schema —
+    // every `law.category = ...` write was silently going nowhere reliable.
+    category: {
+        type: String,
+        enum: [
+            'family', 'criminal', 'business', 'property', 'labor',
+            'tax', 'constitutional', 'consumer', 'cyber', 'environmental',
+            'civil', 'human_rights', 'uncategorized'
+        ],
+        default: 'uncategorized',
+        index: true
+    },
+
     // Original government website link
     link: {
         type: String,
@@ -71,6 +102,8 @@ const ScrapedLawSchema = new mongoose.Schema({
 
 // Index for fast filtering by source
 ScrapedLawSchema.index({ source: 1 });
+ScrapedLawSchema.index({ category: 1 });
+ScrapedLawSchema.index({ source: 1, category: 1 });
 ScrapedLawSchema.index({ 'title.en': 'text', 'title.ur': 'text' });
 
 // Update `updatedAt` on save
