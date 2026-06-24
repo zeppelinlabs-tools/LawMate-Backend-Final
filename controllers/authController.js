@@ -65,7 +65,10 @@ exports.register = async (req, res) => {
             firstName, lastName, email, password, role, phone, username,
             dob, gender, barNumber, barCouncil, specialization, yearsExp,
             consultationFee, city, bio, languages, isAvailable, casesHandled,
-            workType, organization, fee, helpedCount, verificationMethod
+            workType, organization, fee, helpedCount, verificationMethod,
+            // ── New structured lawyer verification fields ───────────────
+            provincialBarCouncil, barRegistrationNumber, cnicNumber,
+            licenseLevel, isGeneralPractice, areasOfPractice
         } = req.body;
 
         if (!email || !password)
@@ -99,15 +102,62 @@ exports.register = async (req, res) => {
         let cnicFrontBackUrl   = '';
         let ngoRegistrationUrl = '';
 
+        // ── New structured document fields (5 separate files) ───────────────
+        let licenseCertificateUrl = '';
+        let cnicFrontUrl          = '';
+        let cnicBackUrl           = '';
+        let barCouncilFrontUrl    = '';
+        let barCouncilBackUrl     = '';
+
         if (typeof getFileUrl === 'function' && req.files) {
             try {
                 if (userRole === 'lawyer') {
+                    // New 5-document set
+                    licenseCertificateUrl = getFileUrl(req, 'licenseCertificate') || '';
+                    cnicFrontUrl          = getFileUrl(req, 'cnicFront') || '';
+                    cnicBackUrl           = getFileUrl(req, 'cnicBack') || '';
+                    barCouncilFrontUrl    = getFileUrl(req, 'barCouncilFront') || '';
+                    barCouncilBackUrl     = getFileUrl(req, 'barCouncilBack') || '';
+
+                    // Legacy combined fields, still supported for any
+                    // in-flight client build mid-rollout.
                     barCouncilCardUrl = getFileUrl(req, 'barCouncilCard') || '';
                 }
                 cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack') || '';
                 ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration') || '';
             } catch (fileErr) {
                 console.error("[File Utility Error Handled]", fileErr.message);
+            }
+        }
+
+        // ── Lawyer document + CNIC validation ───────────────────────────────
+        // Only enforced for the lawyer role — clients and social workers are
+        // unaffected. CNIC must be exactly 13 digits once any non-digit
+        // formatting characters (dashes, spaces) are stripped, matching the
+        // 00000-0000000-0 mask applied client-side.
+        if (userRole === 'lawyer') {
+            const cleanCnic = (cnicNumber || '').replace(/\D/g, '');
+            if (cleanCnic.length !== 13) {
+                return res.status(400).json({
+                    msg: 'CNIC must be exactly 13 digits (format: 00000-0000000-0).'
+                });
+            }
+
+            const requiredDocs = {
+                licenseCertificate: licenseCertificateUrl,
+                cnicFront:          cnicFrontUrl,
+                cnicBack:           cnicBackUrl,
+                barCouncilFront:    barCouncilFrontUrl,
+                barCouncilBack:     barCouncilBackUrl,
+            };
+            const missingDocs = Object.entries(requiredDocs)
+                .filter(([, url]) => !url)
+                .map(([field]) => field);
+
+            if (missingDocs.length > 0) {
+                return res.status(400).json({
+                    msg: `Missing required document(s): ${missingDocs.join(', ')}.`
+                });
             }
         }
 
@@ -135,6 +185,25 @@ exports.register = async (req, res) => {
             barCouncilCardUrl,
             cnicFrontBackUrl,
             specialization:     specialization    || '',
+
+            // ── New structured lawyer verification fields ───────────────
+            provincialBarCouncil:  provincialBarCouncil  || '',
+            barRegistrationNumber: barRegistrationNumber || '',
+            cnicNumber:            (cnicNumber || '').replace(/\D/g, ''),
+            licenseLevel:          licenseLevel          || '',
+            isGeneralPractice:     isGeneralPractice === true || isGeneralPractice === 'true',
+            areasOfPractice:       Array.isArray(areasOfPractice)
+                                        ? areasOfPractice
+                                        : (typeof areasOfPractice === 'string' && areasOfPractice
+                                            ? areasOfPractice.split(',').map(s => s.trim()).filter(Boolean)
+                                            : []),
+            licenseCertificateUrl,
+            cnicFrontUrl,
+            cnicBackUrl,
+            barCouncilFrontUrl,
+            barCouncilBackUrl,
+            isVerifiedProfile:  false,
+
             yearsExp:           yearsExp          || 0,
             consultationFee:    consultationFee   || 0,
             casesHandled:       casesHandled      || 0,
@@ -522,13 +591,29 @@ exports.toggleBookmark = async (req, res) => {
 // ── Bookmarks: get the user's populated bookmarked laws ──────────────────────
 exports.getBookmarks = async (req, res) => {
     try {
-        const Law = require('../models/Law');
+        const ScrapedLaw = require('../models/ScrapedLaw');
         const user = await User.findById(req.user.id).select('bookmarkedLaws');
         if (!user) return res.status(404).json({ msg: 'User not found' });
 
-        const laws = await Law.find({ _id: { $in: user.bookmarkedLaws } })
-            .populate('categoryId');
-        res.json({ success: true, laws });
+        const laws = await ScrapedLaw.find({ _id: { $in: user.bookmarkedLaws } });
+
+        // Flatten the bilingual nested fields to a flat shape, matching the
+        // exact response format used by GET /api/scraped-laws/:source so the
+        // frontend can render bookmarked laws with the same model either way.
+        const formatted = laws.map(law => ({
+            id: law._id,
+            source: law.source,
+            title: law.title?.en || '',
+            titleUrdu: law.title?.ur || '',
+            summary: law.summary?.en || '',
+            summaryUrdu: law.summary?.ur || '',
+            keyPoints: law.keyPoints?.en || [],
+            keyPointsUrdu: law.keyPoints?.ur || [],
+            link: law.link,
+            isEnriched: law.isEnriched,
+        }));
+
+        res.json({ success: true, laws: formatted });
     } catch (err) {
         return handleSaveError(err, res);
     }
