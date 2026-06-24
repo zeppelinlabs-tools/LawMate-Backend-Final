@@ -31,7 +31,7 @@ const storage = multer.diskStorage({
     }
 });
 
-// ── File type filter ──────────────────────────────────────────
+// ── File type filter (images + PDF only — lawyer verification docs) ────
 const fileFilter = (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|pdf/;
     const extName  = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -44,12 +44,44 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
+// ── Wider file type filter (images + PDF + video) — used for connection
+// request attachments and the shared Document Vault, where the doc spec
+// explicitly calls for video support too. ──────────────────────────────
+const mediaFileFilter = (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|pdf|mp4|mov|m4v/;
+    const extName  = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimeType = /image|pdf|video/.test(file.mimetype);
+
+    if (extName && mimeType) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only JPG, PNG, PDF, and video files are allowed.'));
+    }
+};
+
 // ── Multer instance ───────────────────────────────────────────
 const upload = multer({
     storage,
     fileFilter,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB max
 });
+
+// Wider instance for connection-request attachments and the Document
+// Vault — these can be videos, which need considerably more headroom
+// than the 5MB cap used for lawyer verification documents.
+const uploadMedia = multer({
+    storage,
+    fileFilter: mediaFileFilter,
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
+});
+
+// Generic single-file uploader — used by the connection-request endpoint,
+// which accepts at most one optional attachment under the field name 'attachment'.
+const uploadSingleAttachment = uploadMedia.single('attachment');
+
+// Document Vault uploader — one file per request under field name 'file',
+// reusing the same wider media filter/size limit.
+const uploadVaultFile = uploadMedia.single('file');
 
 // ── Exported upload configs ───────────────────────────────────
 
@@ -82,8 +114,30 @@ function getFileUrl(req, fieldName) {
     return `/documents/${file.filename}`;
 }
 
+// Companion helper for routes using upload.single() instead of
+// upload.fields() — req.file (singular) rather than req.files (plural).
+function getSingleFileUrl(req) {
+    if (!req.file) return '';
+    return `/documents/${req.file.filename}`;
+}
+
+// Classifies an uploaded file by extension into 'image' | 'video' | 'document',
+// matching the three categories the Document Vault and connection-request
+// attachment feature both need to tag stored files with.
+function classifyFileType(filename) {
+    const ext = path.extname(filename || '').toLowerCase();
+    if (['.png', '.jpg', '.jpeg'].includes(ext)) return 'image';
+    if (['.mp4', '.mov', '.m4v'].includes(ext)) return 'video';
+    if (ext === '.pdf') return 'document';
+    return 'document';
+}
+
 module.exports = {
     uploadLawyerDocs,
     uploadSocialWorkerDocs,
-    getFileUrl
+    uploadSingleAttachment,
+    uploadVaultFile,
+    getFileUrl,
+    getSingleFileUrl,
+    classifyFileType
 };
