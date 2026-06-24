@@ -22,6 +22,22 @@ const CaseEngagementSchema = new mongoose.Schema({
 
     isFreeService: { type: Boolean, default: false },
 
+    // ── Connection request context (set when status === 'REQUESTING') ──
+    initialMessage:       { type: String, default: '' },
+    initialAttachmentUrl: { type: String, default: '' },
+    initialAttachmentType: {
+        type: String,
+        enum: ['', 'image', 'video', 'document'],
+        default: ''
+    },
+
+    // ── Set only when a professional declines (status -> 'DISPUTED') ───
+    // Kept separate from the billing-dispute meaning of DISPUTED — this is
+    // specifically "professional declined a connection request", not a
+    // payment dispute. A non-empty rejectionReason combined with no
+    // financials activity is how the client UI tells the two apart.
+    rejectionReason: { type: String, default: '' },
+
     // ── Financials ────────────────────────────────────────────
     financials: {
         totalAmount:        { type: Number, default: 0 },
