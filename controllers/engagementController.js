@@ -23,9 +23,23 @@ function getProfessionalId(engagement) {
     return engagement.lawyerId || engagement.socialWorkerId || null;
 }
 
+// Safely require the upload helpers — same defensive pattern used
+// elsewhere in this codebase so a missing/broken middleware file
+// degrades to "no attachment support" rather than crashing every
+// engagement route.
+let getSingleFileUrl, classifyFileType;
+try {
+    const uploadMiddleware = require('../middleware/uploadMiddleware');
+    getSingleFileUrl = uploadMiddleware.getSingleFileUrl;
+    classifyFileType = uploadMiddleware.classifyFileType;
+} catch (e) {
+    console.error('[Engagement Controller] uploadMiddleware import skipped:', e.message);
+}
+
 // ─────────────────────────────────────────────────────────────
 // A. POST /api/engagements/request
 // Client initiates a connection request to a professional.
+// Optionally includes one file attachment under field name 'attachment'.
 // ─────────────────────────────────────────────────────────────
 exports.requestEngagement = async (req, res) => {
     try {
@@ -63,10 +77,25 @@ exports.requestEngagement = async (req, res) => {
             });
         }
 
+        // ── Optional attachment sent with the connection request ────────
+        let attachmentUrl  = '';
+        let attachmentType = '';
+        if (typeof getSingleFileUrl === 'function' && req.file) {
+            try {
+                attachmentUrl  = getSingleFileUrl(req) || '';
+                attachmentType = attachmentUrl ? classifyFileType(req.file.originalname) : '';
+            } catch (fileErr) {
+                console.error('[requestEngagement] File handling error:', fileErr.message);
+            }
+        }
+
         // Create engagement
         const engagementData = {
             clientId,
             status: 'REQUESTING',
+            initialMessage:        (initialMessage || '').trim(),
+            initialAttachmentUrl:  attachmentUrl,
+            initialAttachmentType: attachmentType,
             ...(isLawyer
                 ? { lawyerId: professionalId }
                 : { socialWorkerId: professionalId })
@@ -75,12 +104,18 @@ exports.requestEngagement = async (req, res) => {
         const engagement = new CaseEngagement(engagementData);
         await engagement.save();
 
-        // Save initial message into chat history if provided
-        if (initialMessage && initialMessage.trim()) {
+        // Save initial message into chat history if provided, tagged with
+        // engagementId so it's correctly scoped when the chat for this
+        // pairing is later queried/displayed.
+        if ((initialMessage && initialMessage.trim()) || attachmentUrl) {
             await ChatMessage.create({
-                senderId:   clientId,
-                receiverId: professionalId,
-                message:    initialMessage.trim()
+                senderId:       clientId,
+                receiverId:     professionalId,
+                engagementId:   engagement._id,
+                message:        (initialMessage || '').trim(),
+                attachmentUrl,
+                attachmentType,
+                attachmentName: req.file ? req.file.originalname : ''
             });
         }
 
@@ -102,11 +137,11 @@ exports.requestEngagement = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // B. POST /api/engagements/respond
 // Professional accepts or declines a request.
-// Body: { engagementId, accept: true/false }
+// Body: { engagementId, accept: true/false, rejectionReason? }
 // ─────────────────────────────────────────────────────────────
 exports.respondEngagement = async (req, res) => {
     try {
-        const { engagementId, accept } = req.body;
+        const { engagementId, accept, rejectionReason } = req.body;
         const professionalId = req.user.id;
 
         if (!engagementId) {
@@ -133,6 +168,26 @@ exports.respondEngagement = async (req, res) => {
             engagement.status = 'FREE_INTAKE';
             await engagement.save();
 
+            // Migrate any attachment sent with the original request into
+            // the shared Document Vault for this pairing, so it's visible
+            // in the persistent Documents Room rather than only sitting in
+            // the chat history.
+            if (engagement.initialAttachmentUrl) {
+                try {
+                    const DocumentVaultItem = require('../models/DocumentVaultItem');
+                    const fileName = engagement.initialAttachmentUrl.split('/').pop() || 'attachment';
+                    await DocumentVaultItem.create({
+                        engagementId: engagement._id,
+                        uploadedBy:   engagement.clientId,
+                        fileName,
+                        fileUrl:      engagement.initialAttachmentUrl,
+                        fileType:     engagement.initialAttachmentType || 'document'
+                    });
+                } catch (vaultErr) {
+                    console.error('[respondEngagement] Vault migration failed:', vaultErr.message);
+                }
+            }
+
             await Notification.create({ userId: engagement.clientId, type: 'connection', title: 'Request Accepted!', message: 'Your connection request has been accepted. You can now chat.', isRead: false });
 
             return res.json({
@@ -142,14 +197,19 @@ exports.respondEngagement = async (req, res) => {
             });
 
         } else {
-            // Decline → mark as DISPUTED
+            // Decline → mark as DISPUTED, recording the professional's reason
+            // (kept distinct from the billing-dispute meaning of this same
+            // status value — see the rejectionReason field comment on the
+            // CaseEngagement schema).
             engagement.status = 'DISPUTED';
+            engagement.rejectionReason = (rejectionReason || '').trim();
             await engagement.save();
 
-            await saveNotification(
-                engagement.clientId,
-                'Your connection request was declined by the professional.'
-            );
+            const reasonText = engagement.rejectionReason
+                ? `Your connection request was declined: ${engagement.rejectionReason}`
+                : 'Your connection request was declined by the professional.';
+
+            await saveNotification(engagement.clientId, reasonText);
 
             return res.json({
                 success: true,
