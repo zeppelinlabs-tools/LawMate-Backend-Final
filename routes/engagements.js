@@ -18,11 +18,24 @@ const auth     = require('../middleware/authMiddleware');
 const { blockUnverifiedProfessional } = require('../middleware/verifiedOnly');
 const ctrl     = require('../controllers/engagementController');
 
+// Safely require the attachment upload middleware — degrades to a no-op
+// passthrough if missing, matching the pattern used in routes/auth.js,
+// so a connection request without an attachment still works even if
+// this middleware were ever removed/broken.
+let uploadSingleAttachment = (req, res, next) => next();
+try {
+    uploadSingleAttachment = require('../middleware/uploadMiddleware').uploadSingleAttachment;
+} catch (e) {
+    console.error('[Engagement Routes] uploadMiddleware import skipped:', e.message);
+}
+
 // Safepay webhook — raw body required
 router.post('/webhook', express.raw({ type: 'application/json' }), ctrl.safepayWebhook);
 
-// Engagement request — blocks unverified professionals
-router.post('/request',            auth, blockUnverifiedProfessional, ctrl.requestEngagement);
+// Engagement request — blocks unverified professionals. Multer's
+// .single() only parses requests with Content-Type: multipart/form-data;
+// a plain JSON request (no attachment) passes through untouched.
+router.post('/request',            auth, blockUnverifiedProfessional, uploadSingleAttachment, ctrl.requestEngagement);
 
 // All other engagement routes
 router.post('/respond',            auth, ctrl.respondEngagement);
