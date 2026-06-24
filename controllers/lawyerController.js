@@ -8,7 +8,7 @@ exports.getLawyers = async (req, res) => {
         const { city, specialization, maxFee } = req.query;
 
         // isVerified: true — unverified lawyers are hidden from public listing
-        const query = { role: 'lawyer' };
+        const query = { role: 'lawyer', isVerified: true };
 
         if (city)           query.city           = city;
         if (specialization) query.specialization = { $regex: specialization, $options: 'i' };
@@ -28,6 +28,7 @@ exports.getSocialWorkers = async (req, res) => {
     try {
         const workers = await User.find({
             role:       'social_worker',
+            isVerified: true,
         }).select('-password');
         res.json(workers);
     } catch (err) {
