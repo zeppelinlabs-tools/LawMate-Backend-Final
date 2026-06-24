@@ -53,10 +53,21 @@ const upload = multer({
 
 // ── Exported upload configs ───────────────────────────────────
 
-// For lawyer registration: barCouncilCard + cnicFrontBack
+// For lawyer registration: 5 mandatory documents.
+// Kept the old 2-field config name available too (uploadLawyerDocsLegacy)
+// in case anything else in the codebase still references the old shape,
+// but registration now uses this 5-field version.
 const uploadLawyerDocs = upload.fields([
-    { name: 'barCouncilCard', maxCount: 1 },
-    { name: 'cnicFrontBack',  maxCount: 1 }
+    { name: 'licenseCertificate', maxCount: 1 },
+    { name: 'cnicFront',          maxCount: 1 },
+    { name: 'cnicBack',           maxCount: 1 },
+    { name: 'barCouncilFront',    maxCount: 1 },
+    { name: 'barCouncilBack',     maxCount: 1 },
+    // Legacy field names kept accepted (not required) so any in-flight
+    // client build mid-rollout that still sends the old 2-field shape
+    // doesn't get a hard 500 from Multer rejecting an unexpected field.
+    { name: 'barCouncilCard',     maxCount: 1 },
+    { name: 'cnicFrontBack',      maxCount: 1 }
 ]);
 
 // For social worker registration: ngoRegistration credential
