@@ -43,6 +43,7 @@ app.use('/api/ngos',                           require('./routes/ngos'));
 app.use('/api/bills',                          require('./routes/bills'));
 app.use('/api/meetings',                       require('./routes/meetings'));
 app.use('/api/engagements',                    require('./routes/engagements'));
+app.use('/api/document-vault',                 require('./routes/documentVault'));
 app.use('/api/users/notification-preferences', require('./routes/userPreferences'));
 
 // ── Static files ──────────────────────────────────────────────
@@ -54,7 +55,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', msg: 'LawMate API 
 const PORT = process.env.PORT || 4000;
 
 connectDB().then(() => {
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
         console.log(`🚀 Server running on port ${PORT}`);
         try {
             const { startReminderCron } = require('./services/reminderCronService');
@@ -63,6 +64,16 @@ connectDB().then(() => {
             console.warn('⚠️  Reminder cron not started:', e.message);
         }
     });
+
+    // Socket.io must attach to the exact same underlying HTTP server
+    // Express is using, not a separate one, so real-time clients connect
+    // on the same host:port the REST API already runs on.
+    try {
+        const { initSocketServer } = require('./services/socketService');
+        initSocketServer(server);
+    } catch (e) {
+        console.warn('⚠️  Socket.io server not started:', e.message);
+    }
 }).catch(err => {
     console.error('Failed to start server:', err);
     process.exit(1);
