@@ -87,6 +87,7 @@ async function processAndSaveLaws(scrapedList, source) {
                 const aiData = await enrichLaw(item.title, source, item.link);
 
                 law.title.ur = aiData.title_ur;
+                law.category = aiData.category;
                 law.summary = { en: aiData.summary_en, ur: aiData.summary_ur };
                 law.keyPoints = { en: aiData.keyPoints_en, ur: aiData.keyPoints_ur };
                 law.realLifeExample = { en: aiData.realLifeExample_en, ur: aiData.realLifeExample_ur };
@@ -158,7 +159,7 @@ exports.fetchAndStoreLaws = async (req, res) => {
 // ─────────────────────────────────────────────
 exports.getLawsBySource = async (req, res) => {
     const { source } = req.params;
-    const { lang = 'en', page = 1, limit = 20, search = '' } = req.query;
+    const { lang = 'en', page = 1, limit = 20, search = '', category = '' } = req.query;
 
     if (!SOURCE_CONFIG[source]) {
         return res.status(400).json({
@@ -169,6 +170,12 @@ exports.getLawsBySource = async (req, res) => {
 
     try {
         const query = { source };
+
+        // Step 2 of the navigation flow: category tab filtering. "all" or an
+        // empty value means no filter (show every category for this region).
+        if (category && category !== 'all') {
+            query.category = category;
+        }
 
         if (search) {
             query.$or = [
@@ -282,6 +289,7 @@ exports.reEnrichLaw = async (req, res) => {
         const aiData = await enrichLaw(law.title.en, source, law.link);
 
         law.title.ur = aiData.title_ur;
+        law.category = aiData.category;
         law.summary = { en: aiData.summary_en, ur: aiData.summary_ur };
         law.keyPoints = { en: aiData.keyPoints_en, ur: aiData.keyPoints_ur };
         law.realLifeExample = { en: aiData.realLifeExample_en, ur: aiData.realLifeExample_ur };
@@ -306,15 +314,84 @@ exports.reEnrichLaw = async (req, res) => {
 // ─────────────────────────────────────────────
 // HELPER: Format law response based on language
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// GET /api/scraped-laws/:source/categories
+// Step 1 of the navigation flow: returns which categories actually have
+// laws in this region, with a count for each, plus an "all" pseudo-entry.
+// The frontend builds its TabBar from this rather than a hardcoded list,
+// so a tab is never shown empty.
+// ─────────────────────────────────────────────
+const CATEGORY_LABELS = {
+    family:         'Family Law',
+    criminal:       'Criminal Law',
+    business:       'Business Law',
+    property:       'Property Law',
+    labor:          'Labor Law',
+    tax:            'Tax Law',
+    constitutional: 'Constitutional Law',
+    consumer:       'Consumer Law',
+    cyber:          'Cyber Law',
+    environmental:  'Environmental Law',
+    civil:          'Civil Law',
+    human_rights:   'Human Rights Law',
+    uncategorized:  'Other',
+};
+
+exports.getCategoriesForSource = async (req, res) => {
+    const { source } = req.params;
+
+    if (!SOURCE_CONFIG[source]) {
+        return res.status(400).json({
+            success: false,
+            msg: `Invalid source. Valid options: ${Object.keys(SOURCE_CONFIG).join(', ')}`
+        });
+    }
+
+    try {
+        const counts = await ScrapedLaw.aggregate([
+            { $match: { source } },
+            { $group: { _id: '$category', count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
+        ]);
+
+        const totalCount = counts.reduce((sum, c) => sum + c.count, 0);
+
+        const categories = counts.map(c => ({
+            value: c._id || 'uncategorized',
+            label: CATEGORY_LABELS[c._id] || CATEGORY_LABELS.uncategorized,
+            count: c.count,
+        }));
+
+        res.json({
+            success: true,
+            source,
+            categories: [
+                { value: 'all', label: 'All Laws', count: totalCount },
+                ...categories,
+            ],
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ success: false, msg: 'Server error' });
+    }
+};
+
 function formatLaw(law, lang = 'en', fullDetail = false) {
     const base = {
         id: law._id,
         source: law.source,
+        category: law.category || 'uncategorized',
         title: lang === 'ur' ? (law.title.ur || law.title.en) : law.title.en,
         summary: lang === 'ur' ? law.summary?.ur : law.summary?.en,
         keyPoints: lang === 'ur' ? law.keyPoints?.ur : law.keyPoints?.en,
         link: law.link,
-        isEnriched: law.isEnriched
+        isEnriched: law.isEnriched,
+        // Both languages included together (additive) so the frontend can
+        // offer an instant English/Urdu toggle without a second network
+        // round-trip, matching the rest of the app's existing UX pattern.
+        titleUrdu: law.title?.ur || '',
+        summaryUrdu: law.summary?.ur || '',
+        keyPointsUrdu: law.keyPoints?.ur || [],
     };
 
     if (fullDetail) {
@@ -324,6 +401,8 @@ function formatLaw(law, lang = 'en', fullDetail = false) {
         base.createdAt = law.createdAt;
         // Also include alternate language for switching
         base.titleAlt = lang === 'ur' ? law.title.en : law.title.ur;
+        base.descriptionUrdu = law.description?.ur || '';
+        base.realLifeExampleUrdu = law.realLifeExample?.ur || '';
     }
 
     return base;
