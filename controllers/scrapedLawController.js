@@ -94,6 +94,7 @@ async function processAndSaveLaws(scrapedList, source) {
                 law.description = { en: aiData.description_en, ur: aiData.description_ur };
                 law.isEnriched = true;
                 law.enrichedAt = new Date();
+                law.lastEnrichmentError = ''; // clear any previous failure record
 
                 await law.save();
                 enriched++;
@@ -102,12 +103,41 @@ async function processAndSaveLaws(scrapedList, source) {
                 await delay(800);
             } catch (aiErr) {
                 errors.push({ title: item.title, error: aiErr.message });
+                // Persist the failure reason on the law itself so it's
+                // queryable via GET /:source/status later, not only
+                // visible in transient logs at the moment scraping ran.
+                try {
+                    law.lastEnrichmentError = aiErr.message;
+                    await law.save();
+                } catch (saveErr) {
+                    console.error('[SCRAPER] Could not persist enrichment error:', saveErr.message);
+                }
             }
 
         } catch (err) {
             errors.push({ title: item.title, error: err.message });
         }
     }
+
+    // Print a clear, hard-to-miss summary the moment this background job
+    // finishes, specifically calling out Anthropic billing/credit errors
+    // since those are the most common silent failure mode here — without
+    // this, the only trace was scattered inside the `errors` array that
+    // nothing ever reads or persists.
+    const billingErrors = errors.filter(e =>
+        /credit balance|insufficient_quota|billing/i.test(e.error || '')
+    );
+    console.log(`\n========================================`);
+    console.log(`[SCRAPER] Finished source: ${source}`);
+    console.log(`  Saved: ${saved}  Skipped: ${skipped}  Enriched: ${enriched}  Errors: ${errors.length}`);
+    if (billingErrors.length > 0) {
+        console.log(`  ⚠️  ${billingErrors.length} failure(s) look like an Anthropic API billing/credit`);
+        console.log(`     issue, not a code bug. Check your Anthropic Console balance.`);
+        console.log(`     Example: ${billingErrors[0].error}`);
+    } else if (errors.length > 0) {
+        console.log(`  ⚠️  Errors occurred — first one: ${errors[0].error}`);
+    }
+    console.log(`========================================\n`);
 
     return { saved, skipped, enriched, errors };
 }
@@ -126,10 +156,15 @@ exports.fetchAndStoreLaws = async (req, res) => {
         });
     }
 
-    // Respond immediately — scraping is a background process
+    // Respond immediately — scraping is a background process. The actual
+    // per-law success/failure detail (including any Anthropic API errors
+    // such as a low credit balance) is only visible in server console
+    // logs below — this used to be the ONLY place that information ever
+    // existed, with no persisted record and no way to check it after the
+    // fact except by watching live logs at the exact moment scraping ran.
     res.json({
         success: true,
-        msg: `Scraping started for ${SOURCE_CONFIG[source].label}. This runs in background. Check GET /api/scraped-laws/${source} to see progress.`
+        msg: `Scraping started for ${SOURCE_CONFIG[source].label}. This runs in background. Check GET /api/scraped-laws/${source}/status for enrichment progress, or server logs for detailed per-law errors.`
     });
 
     // Run scrape + enrich in background (don't await in response)
@@ -258,6 +293,15 @@ exports.getSourceStatus = async (req, res) => {
         const enriched = await ScrapedLaw.countDocuments({ source, isEnriched: true });
         const pending = total - enriched;
 
+        // Surface real failure reasons here so they're checkable via a
+        // normal API call rather than only visible in transient server
+        // logs at the exact moment the background scraping job ran.
+        const failedLaws = await ScrapedLaw.find({
+            source,
+            isEnriched: false,
+            lastEnrichmentError: { $ne: '' }
+        }).select('title.en lastEnrichmentError').limit(5);
+
         res.json({
             success: true,
             source,
@@ -267,7 +311,11 @@ exports.getSourceStatus = async (req, res) => {
                 enriched,
                 pending,
                 percentComplete: total > 0 ? Math.round((enriched / total) * 100) : 0
-            }
+            },
+            recentEnrichmentFailures: failedLaws.map(l => ({
+                title: l.title?.en,
+                error: l.lastEnrichmentError
+            }))
         });
 
     } catch (err) {
