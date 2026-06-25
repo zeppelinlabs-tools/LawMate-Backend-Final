@@ -89,6 +89,15 @@ const ScrapedLawSchema = new mongoose.Schema({
         type: Date
     },
 
+    // Persists the exact reason enrichment failed (e.g. an Anthropic API
+    // billing error), so it's queryable later via GET /:source/status
+    // rather than only existing in transient console logs at the moment
+    // the background scraping job ran.
+    lastEnrichmentError: {
+        type: String,
+        default: ''
+    },
+
     createdAt: {
         type: Date,
         default: Date.now
