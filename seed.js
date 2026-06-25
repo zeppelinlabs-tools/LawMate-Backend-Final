@@ -2,6 +2,25 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
+// ── SAFETY GUARD ─────────────────────────────────────────────────────────────
+// This script calls deleteMany({}) on Post (and elsewhere) before inserting
+// sample data — running it against a live/production database would
+// silently wipe every real post, case, etc. first. This is exactly how a
+// fake "Supreme Court New Guidelines" post by a fabricated "Ahmed Khan"
+// ended up permanently sitting in the real feed: this script was run
+// against the live database with no guard in place.
+//
+// Require an explicit opt-in flag so this can never run by accident again.
+if (!process.argv.includes('--i-know-this-wipes-data')) {
+    console.error(
+        '\n🛑 seed.js deletes existing data before inserting sample records.\n' +
+        '   This must never be run against a live/production database.\n\n' +
+        '   If you genuinely want to reset a LOCAL/DEV database, re-run with:\n' +
+        '     node seed.js --i-know-this-wipes-data\n'
+    );
+    process.exit(1);
+}
+
 // Mongoose Models Import
 const User = require('./models/User');
 const LawCategory = require('./models/LawCategory');
