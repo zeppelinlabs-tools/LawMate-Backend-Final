@@ -18,6 +18,24 @@ const PostSchema = new mongoose.Schema({
     tag:        { type: String, default: '' },
     likes:      { type: Number, default: 0 },
     likedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+    // Users who bookmarked/saved this post — needed for the Feed Profile
+    // Hub's "Saved Posts" view (Part 5 of the connection-overhaul spec).
+    savedBy:    [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+    // Real comment thread, replacing the old plain `comments: Number`
+    // counter the seed script set (which had no matching schema field at
+    // all, so Mongoose silently discarded it on save — confirming that
+    // counter was never actually functional). authorId is needed so the
+    // Feed Profile Hub's "My Commented Threads" view can find every post
+    // where a given user has commented.
+    comments: [{
+        authorId:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        authorName: { type: String, default: '' },
+        text:       { type: String, required: true },
+        createdAt:  { type: Date, default: Date.now },
+    }],
+
     createdAt:  { type: Date, default: Date.now }
 });
 
