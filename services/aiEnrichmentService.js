@@ -68,7 +68,16 @@ Rules:
         },
         body: JSON.stringify({
             model: MODEL,
-            max_tokens: 2000,
+            // 2000 was too tight for this prompt — it asks for 4 content
+            // fields (summary, key points, real-life example,
+            // description) in BOTH English and Urdu, and Urdu script
+            // tends to need notably more tokens than English for the
+            // same meaning. Responses were getting cut off mid-field,
+            // breaking the JSON and showing up as "Failed to parse
+            // Claude response as JSON" with the text trailing off
+            // mid-sentence. 4000 gives comfortable headroom for even a
+            // law with many key points and longer descriptions.
+            max_tokens: 4000,
             messages: [
                 { role: 'user', content: prompt }
             ]
@@ -90,7 +99,17 @@ Rules:
     try {
         parsed = JSON.parse(cleaned);
     } catch (e) {
-        throw new Error(`Failed to parse Claude response as JSON: ${cleaned.slice(0, 300)}`);
+        // Distinguish "ran out of tokens mid-response" from "genuinely
+        // malformed JSON" — these need different fixes (raise
+        // max_tokens further vs. fix the prompt), so collapsing them
+        // into one generic parse error makes the real cause invisible
+        // when checking GET /:source/status later.
+        const truncated = data.stop_reason === 'max_tokens';
+        throw new Error(
+            truncated
+                ? `Response truncated (hit max_tokens limit) before completing valid JSON. First 300 chars: ${cleaned.slice(0, 300)}`
+                : `Failed to parse Claude response as JSON: ${cleaned.slice(0, 300)}`
+        );
     }
 
     const VALID_CATEGORIES = [
