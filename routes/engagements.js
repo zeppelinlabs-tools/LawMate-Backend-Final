@@ -17,6 +17,7 @@ const router   = express.Router();
 const auth     = require('../middleware/authMiddleware');
 const { blockUnverifiedProfessional } = require('../middleware/verifiedOnly');
 const ctrl     = require('../controllers/engagementController');
+const CaseEngagement = require('../models/CaseEngagement');
 
 // Safely require the attachment upload middleware — degrades to a no-op
 // passthrough if missing, matching the pattern used in routes/auth.js,
@@ -44,14 +45,43 @@ router.post('/initialize-payment', auth, ctrl.initializePayment);
 router.post('/process-payment',    auth, ctrl.processPayment);
 router.post('/complete',           auth, ctrl.completeEngagement);
 router.get ('/',                   auth, ctrl.getMyEngagements);
+// Toggle call access. Either side (the professional OR the client) can
+// flip their OWN flag — a real call is only allowed once BOTH flags are
+// true. req.user.id + the engagement's clientId/lawyerId/socialWorkerId
+// tell us which side is toggling, so the same endpoint works for both.
 router.put('/toggle-call/:engagementId', auth, async (req, res) => {
     try {
         const eng = await CaseEngagement.findById(req.params.engagementId);
         if (!eng) return res.status(404).json({ msg: 'Not found' });
-        eng.callEnabled = !eng.callEnabled;
+
+        const viewerId = req.user.id.toString();
+        const isClient = eng.clientId?.toString() === viewerId;
+        const isProfessional =
+            eng.lawyerId?.toString() === viewerId ||
+            eng.socialWorkerId?.toString() === viewerId;
+
+        if (!isClient && !isProfessional) {
+            return res.status(403).json({ msg: 'Not a participant in this engagement.' });
+        }
+
+        if (isClient) {
+            eng.clientCallEnabled = !eng.clientCallEnabled;
+        } else {
+            eng.professionalCallEnabled = !eng.professionalCallEnabled;
+            eng.callEnabled = eng.professionalCallEnabled; // keep legacy flag in sync
+        }
+
         await eng.save();
-        res.json({ success: true, callEnabled: eng.callEnabled });
+        res.json({
+            success: true,
+            professionalCallEnabled: eng.professionalCallEnabled,
+            clientCallEnabled:       eng.clientCallEnabled,
+            // True only when both sides have switched call access on.
+            bothCallEnabled: eng.professionalCallEnabled && eng.clientCallEnabled,
+            callEnabled: eng.callEnabled, // legacy field, mirrors professional side
+        });
     } catch (err) {
+        console.error('[Engagements TOGGLE CALL]', err.message);
         res.status(500).json({ msg: 'Server error' });
     }
 });
