@@ -83,6 +83,11 @@ const uploadSingleAttachment = uploadMedia.single('attachment');
 // reusing the same wider media filter/size limit.
 const uploadVaultFile = uploadMedia.single('file');
 
+// Feed post uploader — up to 6 images/videos per post under field name
+// 'files', reusing the same image+video+pdf filter and 50MB-per-file cap
+// as the vault/attachment uploaders above.
+const uploadFeedMedia = uploadMedia.array('files', 6);
+
 // ── Exported upload configs ───────────────────────────────────
 
 // For lawyer registration: 5 mandatory documents.
@@ -137,6 +142,7 @@ module.exports = {
     uploadSocialWorkerDocs,
     uploadSingleAttachment,
     uploadVaultFile,
+    uploadFeedMedia,
     getFileUrl,
     getSingleFileUrl,
     classifyFileType
