@@ -470,7 +470,7 @@ function delay(ms) {
 // saved — so this is a one-time cleanup for what's already in the
 // database. Safe to call again later; it's a no-op once junk is gone.
 // ─────────────────────────────────────────────
-const JUNK_TITLE_PATTERN = /^(About(\s+Us)?|Contact(\s+Us)?|FAQ|Home|Search|Login|Register|Privacy(\s+Policy)?|Terms(\s+(of\s+)?(Use|Service))?|Back|Next|Previous|Download|Print|Share|Links|Sitemap|Feedback|Help|Category\s*Wise|Document\s*Retrieval|Disclaimer|Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?|Laws?\s+in\s+Alphabetical\s+Order)\s*$/i;
+const JUNK_TITLE_PATTERN = /^(About(\s+Us)?|Contact(\s+Us)?|FAQ|Home|Search|Login|Register|Privacy(\s+Policy)?|Terms(\s+(of\s+)?(Use|Service))?|Back|Next|Previous|Download|Print|Share|Links|Sitemap|Feedback|Help|Category\s*Wise|Document\s*Retrieval(\s+System)?(\s*\n?\s*NEW)?|Disclaimer|Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?|(Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?)\s+in\s+\w+\s+Order)\s*$/i;
 
 exports.cleanupJunkLaws = async (req, res) => {
     const { source } = req.params;
