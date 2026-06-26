@@ -14,7 +14,11 @@ const PostSchema = new mongoose.Schema({
         type:     String,
         required: true
     },
-    imageUrl:   { type: String, default: '' },
+    imageUrl:   { type: String, default: '' }, // legacy single-image field, kept for old posts
+    media: [{
+        url:  { type: String, required: true },
+        type: { type: String, enum: ['image', 'video'], required: true }
+    }],
     tag:        { type: String, default: '' },
     likes:      { type: Number, default: 0 },
     likedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
