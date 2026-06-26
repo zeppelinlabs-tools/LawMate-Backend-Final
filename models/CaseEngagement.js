@@ -57,6 +57,21 @@ const CaseEngagementSchema = new mongoose.Schema({
         videoRoomId:      { type: String, default: '' }
     },
 
+    // ── Call access ──────────────────────────────────────────
+    // Either side can independently enable/disable call access for the
+    // OTHER party. A call is only actually allowed when BOTH flags are
+    // true — see CaseEngagement.bothCallEnabled below. Kept as two
+    // separate flags (rather than one shared bool) because the lawyer
+    // and the client each need their own on/off switch, per the
+    // connection-page call-access spec.
+    professionalCallEnabled: { type: Boolean, default: false },
+    clientCallEnabled:       { type: Boolean, default: false },
+
+    // Legacy single flag, kept (not removed) so any older client build
+    // mid-rollout that still reads `callEnabled` directly doesn't break.
+    // Mirrors professionalCallEnabled going forward.
+    callEnabled: { type: Boolean, default: false },
+
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
