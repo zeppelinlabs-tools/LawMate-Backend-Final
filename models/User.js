@@ -30,6 +30,11 @@ const UserSchema = new mongoose.Schema({
         default: 'client'
     },
     isVerified:          { type: Boolean, default: false },
+    // Set when a manual review (see lawyerController.setProfessionalVerification)
+    // rejects a lawyer/social-worker application — lets them see why on
+    // their profile/status screen instead of just staying invisible
+    // with no explanation.
+    verificationRejectionReason: { type: String, default: '' },
     isActive:            { type: Boolean, default: false },
     isAccountVerified:   { type: Boolean, default: false },
     verificationMethod:  { type: String, enum: ['email', 'phone'], default: 'email' },
