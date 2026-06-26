@@ -22,12 +22,39 @@ const axiosConfig = {
 // Filter out navigation/menu links — only keep real law titles
 const isRealLaw = (title) => {
     if (!title || title.length < 8) return false;
-    // Must contain legal keywords
+
+    const trimmed = title.trim();
+
+    // Must NOT be a navigation/menu item. Previously this only matched
+    // an EXACT single word ("About", "Contact") because the regex was
+    // anchored ^...$ with no wildcard — so two-word site-nav labels like
+    // "About Us" or "Contact Us" slipped straight through undetected.
+    // Allowing optional trailing words (e.g. "Us", "Page") closes that gap.
+    const navKeywords = /^(Home|About(\s+Us)?|Contact(\s+Us)?|FAQ|English|Urdu|اردو|Search|Login|Register|Privacy(\s+Policy)?|Terms(\s+(of\s+)?(Use|Service))?|Back|Next|Previous|Download|Print|Share|Links|Sitemap|Feedback|Help|Category\s*Wise|Document\s*Retrieval|Disclaimer)\s*$/i;
+    if (navKeywords.test(trimmed)) return false;
+
+    // Site section headers like "Amendment" or "Laws in Alphabetical
+    // Order" technically contain a legal keyword (the regex below would
+    // match "Amendment" on its own) but are navigation labels, not the
+    // name of an actual law — a real amendment's title always names what
+    // it amends (e.g. "Companies (Amendment) Act, 2017"). Reject titles
+    // that are JUST the bare keyword with nothing else around it.
+    const bareCategoryLabel = /^(Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?)(\s+(in\s+)?(Alphabetical\s+)?Order)?\s*$/i;
+    if (bareCategoryLabel.test(trimmed)) return false;
+
+    // Must contain legal keywords to even be considered a law title
     const legalKeywords = /Act|Ordinance|Code|Rules|Regulation|Order|Decree|Statute|Law|Bill|Amendment|Schedule|Constitution/i;
-    if (!legalKeywords.test(title)) return false;
-    // Must NOT be navigation items
-    const navKeywords = /^(Home|About|Contact|FAQ|English|Urdu|اردو|Search|Login|Register|Privacy|Terms|Back|Next|Previous|Download|Print|Share|Links|Sitemap|Feedback|Help)$/i;
-    if (navKeywords.test(title.trim())) return false;
+    if (!legalKeywords.test(trimmed)) return false;
+
+    // Real law titles virtually always end in a year or "Act/Ordinance/
+    // Code" etc. followed by punctuation/number, OR contain multiple
+    // words beyond the bare keyword. Reject anything under 3 words,
+    // since that's almost always a nav label slipping through
+    // ("Category Wise", "Document Retrieval") rather than a genuine
+    // title ("Contract Act 1872", "Code of Civil Procedure 1908").
+    const wordCount = trimmed.split(/\s+/).length;
+    if (wordCount < 3) return false;
+
     return true;
 };
 
