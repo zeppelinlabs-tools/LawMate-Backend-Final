@@ -40,9 +40,11 @@ function validateUsername(username) {
 }
 
 // ── Helper: send OTP ─────────────────────────────────────────
-async function sendOtp(method, destination, code) {
-    console.log(`[OTP] Sending ${code} via ${method} to ${destination}`);
-}
+// Real delivery (Brevo for email, Twilio for SMS) lives in
+// services/otpDeliveryService.js — see that file for setup details
+// and how it safely falls back to console logging if API keys
+// aren't configured yet.
+const { sendOtp } = require('../services/otpDeliveryService');
 
 // ── Helper: Global Error Handler ─────────────────────────────
 function handleSaveError(err, res) {
@@ -73,6 +75,15 @@ exports.register = async (req, res) => {
 
         if (!email || !password)
             return res.status(400).json({ msg: 'Email and password are required.' });
+
+        // If the person chose phone-based verification, a phone number
+        // is required — otherwise there's nowhere to actually send the
+        // code, and they'd be stuck with no way to verify their account.
+        if (verificationMethod === 'phone' && !(phone || '').trim()) {
+            return res.status(400).json({
+                msg: 'A phone number is required to verify by SMS. Please enter your phone number or choose email verification instead.'
+            });
+        }
 
         const usernameError = validateUsername(username);
         if (usernameError) return res.status(400).json({ msg: usernameError });
@@ -317,6 +328,12 @@ exports.resendOtp = async (req, res) => {
         const otpCode = generateOtp();
         const method  = user.verificationMethod || 'email';
         const dest    = method === 'phone' ? (user.phone || '') : user.email;
+
+        if (method === 'phone' && !dest) {
+            return res.status(400).json({
+                msg: 'No phone number on file for SMS verification. Please contact support or update your profile with a phone number.'
+            });
+        }
 
         await Otp.create({
             userId,
