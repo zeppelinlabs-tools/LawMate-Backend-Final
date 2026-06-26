@@ -459,3 +459,119 @@ function formatLaw(law, lang = 'en', fullDetail = false) {
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// ─────────────────────────────────────────────
+// DELETE /api/scraped-laws/:source/cleanup-junk
+// Removes already-saved non-law entries (site navigation labels like
+// "About Us", "Contact Us", "Category Wise", "Amendment" with no real
+// act name) that were stored before the isRealLaw() filter in
+// scraperService.js existed/was strengthened. Re-running the scraper
+// alone does NOT remove these — it only stops NEW junk from being
+// saved — so this is a one-time cleanup for what's already in the
+// database. Safe to call again later; it's a no-op once junk is gone.
+// ─────────────────────────────────────────────
+const JUNK_TITLE_PATTERN = /^(About(\s+Us)?|Contact(\s+Us)?|FAQ|Home|Search|Login|Register|Privacy(\s+Policy)?|Terms(\s+(of\s+)?(Use|Service))?|Back|Next|Previous|Download|Print|Share|Links|Sitemap|Feedback|Help|Category\s*Wise|Document\s*Retrieval|Disclaimer|Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?|Laws?\s+in\s+Alphabetical\s+Order)\s*$/i;
+
+exports.cleanupJunkLaws = async (req, res) => {
+    const { source } = req.params;
+
+    if (source !== 'all' && !SOURCE_CONFIG[source]) {
+        return res.status(400).json({
+            success: false,
+            msg: `Invalid source. Valid options: all, ${Object.keys(SOURCE_CONFIG).join(', ')}`
+        });
+    }
+
+    try {
+        const query = source === 'all' ? {} : { source };
+        const candidates = await ScrapedLaw.find(query).select('title.en source');
+
+        const junkIds = candidates
+            .filter(l => {
+                const t = (l.title?.en || '').trim();
+                // Reject if it matches the junk pattern outright, OR if
+                // it's under 3 words (same "too short to be a real law
+                // title" rule used going forward in isRealLaw()).
+                return JUNK_TITLE_PATTERN.test(t) || t.split(/\s+/).length < 3;
+            })
+            .map(l => l._id);
+
+        if (junkIds.length === 0) {
+            return res.json({ success: true, msg: 'No junk entries found.', deletedCount: 0, deletedTitles: [] });
+        }
+
+        const deletedTitles = candidates
+            .filter(l => junkIds.includes(l._id))
+            .map(l => l.title?.en);
+
+        await ScrapedLaw.deleteMany({ _id: { $in: junkIds } });
+
+        res.json({
+            success: true,
+            msg: `Removed ${junkIds.length} non-law entries.`,
+            deletedCount: junkIds.length,
+            deletedTitles,
+        });
+    } catch (err) {
+        console.error('[CLEANUP JUNK]', err.message);
+        res.status(500).json({ success: false, msg: 'Server error', error: err.message });
+    }
+};
+
+// ─────────────────────────────────────────────
+// POST /api/scraped-laws/:source/enrich-all
+// Bulk re-enrich every un-enriched law for a source in one call,
+// instead of needing one POST /:id/enrich per law. Responds
+// immediately (same background-job pattern as fetchAndStoreLaws) since
+// enriching 100+ laws one at a time, with a rate-limit delay between
+// each, can take several minutes — checkable via GET /:source/status.
+// ─────────────────────────────────────────────
+exports.enrichAllPending = async (req, res) => {
+    const { source } = req.params;
+
+    if (!SOURCE_CONFIG[source]) {
+        return res.status(400).json({
+            success: false,
+            msg: `Invalid source. Valid options: ${Object.keys(SOURCE_CONFIG).join(', ')}`
+        });
+    }
+
+    const pending = await ScrapedLaw.find({ source, isEnriched: false });
+
+    if (pending.length === 0) {
+        return res.json({ success: true, msg: 'Nothing to enrich — every law for this source is already enriched.' });
+    }
+
+    res.json({
+        success: true,
+        msg: `Enriching ${pending.length} laws in the background. Check GET /api/scraped-laws/${source}/status for progress.`
+    });
+
+    setImmediate(async () => {
+        let done = 0, failed = 0;
+        for (const law of pending) {
+            try {
+                const aiData = await enrichLaw(law.title.en, source, law.link);
+                law.title.ur = aiData.title_ur;
+                law.category = aiData.category;
+                law.summary = { en: aiData.summary_en, ur: aiData.summary_ur };
+                law.keyPoints = { en: aiData.keyPoints_en, ur: aiData.keyPoints_ur };
+                law.realLifeExample = { en: aiData.realLifeExample_en, ur: aiData.realLifeExample_ur };
+                law.description = { en: aiData.description_en, ur: aiData.description_ur };
+                law.isEnriched = true;
+                law.enrichedAt = new Date();
+                law.lastEnrichmentError = '';
+                await law.save();
+                done++;
+            } catch (err) {
+                failed++;
+                try {
+                    law.lastEnrichmentError = err.message;
+                    await law.save();
+                } catch (_) { /* best-effort */ }
+            }
+            await delay(800); // same rate-limit spacing as the scrape-time enrichment
+        }
+        console.log(`[BULK ENRICH] ${source}: done=${done} failed=${failed} of ${pending.length}`);
+    });
+};
