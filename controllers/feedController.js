@@ -26,6 +26,7 @@ function formatPost(post, viewerId, followingSet) {
         title:      obj.title,
         content:    obj.content,
         imageUrl:   obj.imageUrl || null,
+        media:      obj.media || [],
         tag:        obj.tag || null,
         likes:      obj.likes || 0,
         comments:   commentsArray.length,
@@ -106,6 +107,19 @@ exports.getPosts = async (req, res) => {
 exports.createPost = async (req, res) => {
     try {
         const { title, content, tag, imageUrl } = req.body;
+        // `media` arrives as a JSON string when sent via multipart/form-data
+        // (which is how the upload route below sends it after uploading
+        // each file) — parse it back into an array of {url, type} objects.
+        let media = [];
+        if (req.body.media) {
+            try {
+                media = typeof req.body.media === 'string'
+                    ? JSON.parse(req.body.media)
+                    : req.body.media;
+            } catch (e) {
+                media = [];
+            }
+        }
 
         if (!content || !content.trim())
             return res.status(400).json({ msg: 'Content is required.' });
@@ -118,6 +132,7 @@ exports.createPost = async (req, res) => {
             title:     (title || '').trim() || 'Post',
             content:   content.trim(),
             imageUrl:  imageUrl  || '',
+            media:     Array.isArray(media) ? media : [],
             tag:       tag       || '',
             likes:     0,
             likedUsers: []
@@ -137,6 +152,7 @@ exports.createPost = async (req, res) => {
             title:      newPost.title,
             content:    newPost.content,
             imageUrl:   newPost.imageUrl || null,
+            media:      newPost.media || [],
             tag:        newPost.tag || null,
             likes:      0,
             comments:   0,
@@ -147,6 +163,32 @@ exports.createPost = async (req, res) => {
     } catch (err) {
         console.error('[Feed POST]', err.message);
         res.status(500).send('Server error');
+    }
+};
+
+// ── POST /api/feed/upload-media ───────────────────────────────
+// Uploads one or more image/video files for a feed post and returns
+// their URLs + types, ready to be sent back in the `media` field of
+// POST /api/feed. Kept as a separate step (upload, THEN create post)
+// so the compose UI can show upload progress/preview before posting,
+// and so a failed post submission doesn't mean re-uploading the files.
+exports.uploadPostMedia = async (req, res) => {
+    try {
+        const files = req.files || [];
+        if (!files.length) {
+            return res.status(400).json({ msg: 'No files received.' });
+        }
+
+        const { classifyFileType } = require('../middleware/uploadMiddleware');
+        const media = files.map(f => ({
+            url:  `/documents/${f.filename}`,
+            type: classifyFileType(f.filename) === 'video' ? 'video' : 'image',
+        }));
+
+        res.status(201).json({ success: true, media });
+    } catch (err) {
+        console.error('[Feed UPLOAD MEDIA]', err.message);
+        res.status(500).json({ msg: 'Server error' });
     }
 };
 
@@ -393,3 +435,25 @@ exports.addComment = async (req, res) => {
     }
 };
 
+// ── GET /api/feed/profile-stats/:userId ───────────────────────
+// Aggregate stats for the Feed Profile Hub header: post count, total
+// likes received across all their posts, and follower/following
+// counts. All derived from existing Post/Follow data — no new model
+// needed.
+exports.getProfileStats = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        const posts = await Post.find({ userId }).select('likes');
+        const postCount  = posts.length;
+        const totalLikes = posts.reduce((sum, p) => sum + (p.likes || 0), 0);
+
+        const followerCount  = await Follow.countDocuments({ followingId: userId });
+        const followingCount = await Follow.countDocuments({ followerId: userId });
+
+        res.json({ postCount, totalLikes, followerCount, followingCount });
+    } catch (err) {
+        console.error('[Feed PROFILE STATS]', err.message);
+        res.status(500).send('Server error');
+    }
+};
