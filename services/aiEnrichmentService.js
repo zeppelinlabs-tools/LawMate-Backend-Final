@@ -6,7 +6,12 @@
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = 'claude-sonnet-4-20250514';
+// claude-sonnet-4-20250514 was retired by Anthropic on June 15, 2026 —
+// every enrichment call using that string returns a hard 400 error,
+// which is exactly why every scraped law was stuck showing "Processing"
+// forever (isEnriched never flips to true because enrichLaw() always
+// throws). claude-sonnet-4-6 is the current, correct replacement.
+const MODEL = 'claude-sonnet-4-6';
 
 /**
  * Generates rich structured content for a given law title using Claude API.
@@ -35,6 +40,7 @@ Official Link: ${lawLink}
 
 Return ONLY a valid JSON object with this exact structure (no markdown, no extra text):
 {
+  "category": "one value from this exact list: family, criminal, business, property, labor, tax, constitutional, consumer, cyber, environmental, civil, human_rights — pick the single best match for this law's primary subject area",
   "title_ur": "law title translated to Urdu",
   "summary_en": "5 to 6 line summary in English — what this law is mainly about, what rights or protections it gives to people",
   "summary_ur": "same summary in Urdu (5 to 6 lines)",
@@ -47,6 +53,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no extra
 }
 
 Rules:
+- "category" MUST be exactly one of: family, criminal, business, property, labor, tax, constitutional, consumer, cyber, environmental, civil, human_rights — no other values, no combinations, lowercase only
 - keyPoints should have 5 to 8 points depending on how many major provisions the law has
 - All Urdu text must be proper Urdu script (nastaliq style)
 - Be accurate — this is for a legal app used by Pakistani citizens
@@ -86,7 +93,17 @@ Rules:
         throw new Error(`Failed to parse Claude response as JSON: ${cleaned.slice(0, 300)}`);
     }
 
+    const VALID_CATEGORIES = [
+        'family', 'criminal', 'business', 'property', 'labor',
+        'tax', 'constitutional', 'consumer', 'cyber', 'environmental',
+        'civil', 'human_rights'
+    ];
+    const category = VALID_CATEGORIES.includes(parsed.category)
+        ? parsed.category
+        : 'uncategorized';
+
     return {
+        category,
         title_ur: parsed.title_ur || '',
         summary_en: parsed.summary_en || '',
         summary_ur: parsed.summary_ur || '',
