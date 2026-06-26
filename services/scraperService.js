@@ -34,13 +34,24 @@ const isRealLaw = (title) => {
     if (navKeywords.test(trimmed)) return false;
 
     // Site section headers like "Amendment" or "Laws in Alphabetical
-    // Order" technically contain a legal keyword (the regex below would
-    // match "Amendment" on its own) but are navigation labels, not the
-    // name of an actual law — a real amendment's title always names what
-    // it amends (e.g. "Companies (Amendment) Act, 2017"). Reject titles
-    // that are JUST the bare keyword with nothing else around it.
-    const bareCategoryLabel = /^(Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?)(\s+(in\s+)?(Alphabetical\s+)?Order)?\s*$/i;
+    // Order" / "Laws in Chronological Order" technically contain a legal
+    // keyword (the regex below would match "Law"/"Amendment" on their
+    // own) but are navigation labels, not the name of an actual law — a
+    // real amendment's title always names what it amends (e.g.
+    // "Companies (Amendment) Act, 2017"). Reject titles that are JUST
+    // the bare keyword, optionally followed by "in ___ Order" — any
+    // sort-order word (Alphabetical, Chronological, Numerical, etc.),
+    // not just "Alphabetical" specifically.
+    const bareCategoryLabel = /^(Amendment|Acts?|Ordinances?|Laws?|Rules?|Regulations?|Codes?|Bills?|Schedules?|Statutes?)(\s+in\s+\w+\s+Order)?\s*$/i;
     if (bareCategoryLabel.test(trimmed)) return false;
+
+    // Catches "Document Retrieval System", "Document Retrieval", and
+    // similar site-feature labels (these aren't a sort-order phrase, so
+    // the pattern above wouldn't catch them) that sometimes carry a
+    // trailing "NEW" badge or stray whitespace/newline from the source
+    // page's markup.
+    const siteFeatureLabel = /^Document\s*Retrieval(\s+System)?(\s*\n?\s*NEW)?\s*$/i;
+    if (siteFeatureLabel.test(trimmed)) return false;
 
     // Must contain legal keywords to even be considered a law title
     const legalKeywords = /Act|Ordinance|Code|Rules|Regulation|Order|Decree|Statute|Law|Bill|Amendment|Schedule|Constitution/i;
