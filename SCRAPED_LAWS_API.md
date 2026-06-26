@@ -203,6 +203,53 @@ POST /api/scraped-laws/punjab/64abc123def456/enrich
 
 ---
 
+### 6. ⚡ Bulk Re-Enrich Every Pending Law for a Source
+**`POST /api/scraped-laws/:source/enrich-all`**
+
+Re-enriches every law for a source where `isEnriched` is still `false`, in one
+call, instead of calling endpoint #5 once per law. Runs in the background —
+responds immediately, then check progress via endpoint #2 (status).
+
+**Example:**
+```
+POST /api/scraped-laws/federal/enrich-all
+```
+
+**When to use this:** after fixing an enrichment problem (e.g. an expired/
+retired AI model string, or adding billing credit) so every law that's stuck
+on "Processing" gets retried in one shot, rather than one request per law.
+
+---
+
+### 7. 🧹 Clean Up Non-Law Entries
+**`DELETE /api/scraped-laws/:source/cleanup-junk`**
+
+Removes already-saved entries that are actually site navigation labels
+("About Us", "Contact Us", "Category Wise", a bare "Amendment" with no real
+act name attached, etc.) rather than real laws — these can end up saved if
+they were scraped before the title filter in `scraperService.js` existed or
+was strengthened. Re-scraping alone does **not** remove these; it only stops
+new junk from being saved going forward. Pass `all` as the source to clean
+every source in one call.
+
+**Example:**
+```
+DELETE /api/scraped-laws/federal/cleanup-junk
+DELETE /api/scraped-laws/all/cleanup-junk
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "msg": "Removed 5 non-law entries.",
+  "deletedCount": 5,
+  "deletedTitles": ["About Us", "Amendment", "Category Wise", "Contact Us", "Document Retrieval"]
+}
+```
+
+---
+
 ## 📱 How to Use in Your App (Frontend)
 
 ### Language Selector:
