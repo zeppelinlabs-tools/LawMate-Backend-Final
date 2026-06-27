@@ -112,6 +112,13 @@ exports.register = async (req, res) => {
         let barCouncilCardUrl  = '';
         let cnicFrontBackUrl   = '';
         let ngoRegistrationUrl = '';
+        // Resolved below from either an uploaded file (regular signup
+        // with a locally-picked image) or a plain URL string already
+        // in the request body (e.g. a Google account's photo URL,
+        // which isn't a file upload at all). Previously register()
+        // never read this from anywhere, so a profile pic picked
+        // during signup never made it past the signup screen.
+        let profilePicUrl = (req.body.profilePic || '').trim();
 
         // ── New structured document fields (5 separate files) ───────────────
         let licenseCertificateUrl = '';
@@ -122,6 +129,9 @@ exports.register = async (req, res) => {
 
         if (typeof getFileUrl === 'function' && req.files) {
             try {
+                if (req.files.profilePic) {
+                    profilePicUrl = getFileUrl(req, 'profilePic') || profilePicUrl;
+                }
                 if (userRole === 'lawyer') {
                     // New 5-document set
                     licenseCertificateUrl = getFileUrl(req, 'licenseCertificate') || '';
@@ -222,7 +232,8 @@ exports.register = async (req, res) => {
             organization:       organization      || '',
             ngoRegistrationUrl,
             fee:                fee               || 0,
-            helpedCount:        helpedCount       || 0
+            helpedCount:        helpedCount       || 0,
+            profilePic:         profilePicUrl
         });
 
         await user.save();
@@ -633,5 +644,56 @@ exports.getBookmarks = async (req, res) => {
         res.json({ success: true, laws: formatted });
     } catch (err) {
         return handleSaveError(err, res);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// DELETE ACCOUNT
+// DELETE /api/auth/delete-account
+// Body: { password }
+//
+// Permanently deletes the logged-in user and cascades the deletion
+// across every related collection (posts, chat history, engagements,
+// bills, meetings, follows, notifications, etc.) via
+// services/accountDeletionService.js. Previously there was NO way to
+// actually delete an account anywhere in the app — the frontend's
+// "delete" only ever logged the device out locally, leaving the real
+// database record (and everything tied to it) untouched, which is
+// why deleted accounts kept reappearing in posts, search results,
+// chat history, and connection lists.
+//
+// Requires the current password as confirmation, the same way
+// changePassword does — this is permanent and irreversible, so it
+// shouldn't be triggerable by a single accidental tap with no
+// re-authentication step.
+// ─────────────────────────────────────────────────────────────
+exports.deleteAccount = async (req, res) => {
+    try {
+        const { password } = req.body;
+        if (!password) {
+            return res.status(400).json({ msg: 'Please enter your password to confirm account deletion.' });
+        }
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: 'User not found.' });
+
+        // Google-signed-up accounts have no password set — skip the
+        // password check for those, matching how changePassword
+        // already handles this case elsewhere in this file.
+        if (user.password) {
+            const isMatch = await bcrypt.compare(password, user.password);
+            if (!isMatch) {
+                return res.status(401).json({ msg: 'Incorrect password.' });
+            }
+        }
+
+        const { deleteUserCascade } = require('../services/accountDeletionService');
+        const summary = await deleteUserCascade(req.user.id);
+
+        console.log(`[DELETE ACCOUNT] User ${req.user.id} deleted.`, summary);
+        res.json({ success: true, msg: 'Your account and all associated data have been permanently deleted.' });
+    } catch (err) {
+        console.error('[DELETE ACCOUNT]', err.message);
+        res.status(500).json({ success: false, msg: 'Server error while deleting account.', error: err.message });
     }
 };
