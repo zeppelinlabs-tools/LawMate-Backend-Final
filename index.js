@@ -52,6 +52,34 @@ app.use('/documents', express.static(path.join(__dirname, 'uploads', 'documents'
 // ── Health check ──────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', msg: 'LawMate API is running' }));
 
+// ── Global error handler ────────────────────────────────────────
+// Must be registered AFTER all routes. Without this, an error thrown
+// by multer (file too large, wrong file type, malformed multipart
+// body) or any other uncaught error in a route handler had no
+// consistent JSON response — depending on the exact failure, the
+// client could see a generic HTML error page, a hang, or a
+// connection reset, none of which the Flutter app's error handling
+// could parse into a useful message. This was part of why attachment
+// uploads on the connection-request flow could fail with literally no
+// feedback to the user.
+const multer = require('multer');
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        let msg = 'File upload failed.';
+        if (err.code === 'LIMIT_FILE_SIZE') msg = 'File is too large.';
+        if (err.code === 'LIMIT_UNEXPECTED_FILE') msg = 'Unexpected file field.';
+        return res.status(400).json({ success: false, msg, code: err.code });
+    }
+    if (err) {
+        console.error('[Unhandled Error]', err.message);
+        return res.status(err.status || 500).json({
+            success: false,
+            msg: err.message || 'Server error.',
+        });
+    }
+    next();
+});
+
 const PORT = process.env.PORT || 4000;
 
 connectDB().then(() => {
