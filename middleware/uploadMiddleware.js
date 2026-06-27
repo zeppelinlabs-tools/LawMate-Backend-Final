@@ -104,12 +104,22 @@ const uploadLawyerDocs = upload.fields([
     // client build mid-rollout that still sends the old 2-field shape
     // doesn't get a hard 500 from Multer rejecting an unexpected field.
     { name: 'barCouncilCard',     maxCount: 1 },
-    { name: 'cnicFrontBack',      maxCount: 1 }
+    { name: 'cnicFrontBack',      maxCount: 1 },
+    // Profile picture, optional, for any role signing up through a
+    // route that uses this uploader (lawyer, and the plain /register
+    // route used by regular client signups). Previously NOT in this
+    // list at all — multer rejects any file sent under a field name
+    // it wasn't told to expect, so a profile pic picked at signup was
+    // either silently dropped (client signup never even tried to send
+    // it as multipart) or would have errored outright if it had.
+    { name: 'profilePic',         maxCount: 1 }
 ]);
 
-// For social worker registration: ngoRegistration credential
+// For social worker registration: ngoRegistration credential + optional
+// profile picture (same reasoning as uploadLawyerDocs above).
 const uploadSocialWorkerDocs = upload.fields([
-    { name: 'ngoRegistration', maxCount: 1 }
+    { name: 'ngoRegistration', maxCount: 1 },
+    { name: 'profilePic',     maxCount: 1 }
 ]);
 
 // ── Helper: get file URL from uploaded files ──────────────────
