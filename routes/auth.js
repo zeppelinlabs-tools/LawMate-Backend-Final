@@ -7,8 +7,11 @@ const auth           = require('../middleware/authMiddleware');
 // middleware file degrades to "no file uploads supported" rather than
 // crashing every auth route (registration, login, etc all live in this file).
 let uploadLawyerDocs = (req, res, next) => next();
+let uploadSocialWorkerDocs = (req, res, next) => next();
 try {
-    uploadLawyerDocs = require('../middleware/uploadMiddleware').uploadLawyerDocs;
+    const mw = require('../middleware/uploadMiddleware');
+    uploadLawyerDocs = mw.uploadLawyerDocs;
+    uploadSocialWorkerDocs = mw.uploadSocialWorkerDocs;
 } catch (e) {
     console.error('[Auth Routes] uploadMiddleware import skipped:', e.message);
 }
@@ -27,11 +30,12 @@ router.put ('/update-profile',  auth, authController.updateProfile);
 router.put ('/profile',         auth, authController.updateProfile);
 router.put('/change-password', auth, authController.changePassword);
 router.post('/register/lawyer', uploadLawyerDocs, authController.register);
-router.post('/register/social-worker', authController.register);
+router.post('/register/social-worker', uploadSocialWorkerDocs, authController.register);
 router.post('/forgot-password',        authController.forgotPassword);
 router.post('/reset-password',         authController.resetPassword);
 router.get('/search-user', auth, authController.searchUser);
 router.post('/bookmark/:lawId', auth, authController.toggleBookmark);
 router.get('/bookmarks',        auth, authController.getBookmarks);
+router.delete('/delete-account', auth, authController.deleteAccount);
 
 module.exports = router;
