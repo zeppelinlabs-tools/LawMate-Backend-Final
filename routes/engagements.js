@@ -36,7 +36,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), ctrl.safepayW
 // Engagement request — blocks unverified professionals. Multer's
 // .single() only parses requests with Content-Type: multipart/form-data;
 // a plain JSON request (no attachment) passes through untouched.
-router.post('/request',            auth, blockUnverifiedProfessional, uploadSingleAttachment, ctrl.requestEngagement);
+// uploadSingleAttachment (multer) MUST run before blockUnverifiedProfessional
+// — multer is what actually parses a multipart/form-data body into
+// req.body in the first place. With the old order, any connection
+// request that included an attachment hit blockUnverifiedProfessional
+// with req.body still completely unparsed, silently skipping the
+// verification check rather than properly evaluating it.
+router.post('/request',            auth, uploadSingleAttachment, blockUnverifiedProfessional, ctrl.requestEngagement);
 
 // All other engagement routes
 router.post('/respond',            auth, ctrl.respondEngagement);
