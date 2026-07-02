@@ -18,10 +18,17 @@ const router  = express.Router();
 const auth    = require('../middleware/authMiddleware');
 const ctrl    = require('../controllers/chatController');
 
+let uploadSingleAttachment = (req, res, next) => next();
+try {
+    uploadSingleAttachment = require('../middleware/uploadMiddleware').uploadSingleAttachment;
+} catch (e) {
+    console.error('[Chat Routes] uploadMiddleware import skipped:', e.message);
+}
+
 // ── Session endpoints ──────────────────────────────────────────
 router.get   ('/sessions',                      auth, ctrl.getSessions);
 router.post  ('/sessions',                      auth, ctrl.createSession);
-router.post  ('/sessions/:sessionId/messages',  auth, ctrl.addMessage);
+router.post  ('/sessions/:sessionId/messages',  auth, uploadSingleAttachment, ctrl.addMessage);
 router.put   ('/sessions/:sessionId',           auth, ctrl.updateSession);
 router.delete('/sessions/:sessionId',           auth, ctrl.deleteSession);
 
