@@ -14,6 +14,28 @@ function formatPost(post, viewerId, followingSet) {
     const author        = obj.userId; // populated user object, or raw id if not populated
     const authorIdStr   = (author?._id || obj.userId)?.toString();
 
+    // If this post is a repost, format the embedded original the same
+    // way (minus its own nested repost, to avoid unbounded recursion —
+    // a repost of a repost still only shows ONE level of embedding,
+    // same as how Twitter/Facebook collapse repost chains visually).
+    let repostOf = null;
+    if (obj.repostOf && typeof obj.repostOf === 'object') {
+        const origAuthor = obj.repostOf.userId;
+        repostOf = {
+            _id:        obj.repostOf._id,
+            authorId:   origAuthor?._id || obj.repostOf.userId,
+            authorName: origAuthor && typeof origAuthor === 'object'
+                ? `${origAuthor.firstName || ''} ${origAuthor.lastName || ''}`.trim() || origAuthor.name || ''
+                : '',
+            authorRole: (origAuthor && typeof origAuthor === 'object') ? origAuthor.role || '' : '',
+            authorPic:  (origAuthor && typeof origAuthor === 'object') ? origAuthor.profilePic || null : null,
+            content:    obj.repostOf.content,
+            imageUrl:   obj.repostOf.imageUrl || null,
+            media:      obj.repostOf.media || [],
+            createdAt:  obj.repostOf.createdAt,
+        };
+    }
+
     return {
         _id:        obj._id,
         authorId:   author?._id   || obj.userId,
@@ -27,7 +49,8 @@ function formatPost(post, viewerId, followingSet) {
         content:    obj.content,
         imageUrl:   obj.imageUrl || null,
         media:      obj.media || [],
-        tag:        obj.tag || null,
+        repostOf:   repostOf,
+        repostsCount: obj.repostsCount || 0,
         likes:      obj.likes || 0,
         comments:   commentsArray.length,
         isLiked:    viewerId
@@ -65,6 +88,10 @@ exports.getPosts = async (req, res) => {
     try {
         const posts = await Post.find()
             .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            })
             .sort({ createdAt: -1 });
 
         const userId = getViewerId(req);
@@ -96,7 +123,17 @@ exports.getPosts = async (req, res) => {
         // Strip the internal sort helper field before sending the response.
         formattedPosts.forEach(p => delete p._sortCreatedAt);
 
-        res.json(formattedPosts);
+        // ?following=true → the "Following" tab: ONLY posts from people
+        // the viewer actually follows, not everyone's posts with
+        // followed ones merely sorted first. Without a real backend
+        // filter, "Following" and "For You" would always show
+        // identical content, which is exactly the bug being fixed here.
+        const onlyFollowing = req.query.following === 'true';
+        const finalPosts = onlyFollowing
+            ? formattedPosts.filter(p => p.isFollowingAuthor)
+            : formattedPosts;
+
+        res.json(finalPosts);
     } catch (err) {
         console.error('[Feed GET]', err.message);
         res.status(500).send('Server error');
@@ -106,7 +143,7 @@ exports.getPosts = async (req, res) => {
 // ── POST /api/feed ────────────────────────────────────────────
 exports.createPost = async (req, res) => {
     try {
-        const { title, content, tag, imageUrl } = req.body;
+        const { title, content, imageUrl } = req.body;
         // `media` arrives as a JSON string when sent via multipart/form-data
         // (which is how the upload route below sends it after uploading
         // each file) — parse it back into an array of {url, type} objects.
@@ -133,7 +170,6 @@ exports.createPost = async (req, res) => {
             content:   content.trim(),
             imageUrl:  imageUrl  || '',
             media:     Array.isArray(media) ? media : [],
-            tag:       tag       || '',
             likes:     0,
             likedUsers: []
         });
@@ -153,7 +189,6 @@ exports.createPost = async (req, res) => {
             content:    newPost.content,
             imageUrl:   newPost.imageUrl || null,
             media:      newPost.media || [],
-            tag:        newPost.tag || null,
             likes:      0,
             comments:   0,
             isLiked:    false,
@@ -162,6 +197,51 @@ exports.createPost = async (req, res) => {
         });
     } catch (err) {
         console.error('[Feed POST]', err.message);
+        res.status(500).send('Server error');
+    }
+};
+
+// ── POST /api/feed/:id/repost ──────────────────────────────────
+// Body: { caption?: string }
+// Reposts an existing post to the viewer's own feed — creates a NEW
+// Post document (so it shows up, gets liked/commented/saved, exactly
+// like any other post) with repostOf pointing at the original, and
+// bumps the original's repostsCount. Caption is optional, same as
+// resharing with or without your own comment on Facebook/Twitter.
+exports.createRepost = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const caption = (req.body.caption || '').trim();
+
+        const original = await Post.findById(id);
+        if (!original) return res.status(404).json({ msg: 'Original post not found.' });
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+
+        const repost = new Post({
+            userId:    user._id,
+            title:     'Repost',
+            content:   caption, // can be empty — a bare reshare with no added comment
+            repostOf:  original._id,
+            likes:     0,
+            likedUsers: [],
+        });
+        await repost.save();
+
+        original.repostsCount = (original.repostsCount || 0) + 1;
+        await original.save();
+
+        const populated = await Post.findById(repost._id)
+            .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            });
+
+        res.status(201).json(formatPost(populated, req.user.id, new Set()));
+    } catch (err) {
+        console.error('[Feed REPOST]', err.message);
         res.status(500).send('Server error');
     }
 };
@@ -306,6 +386,10 @@ exports.getUserPosts = async (req, res) => {
         const { userId: targetUserId } = req.params;
         const posts = await Post.find({ userId: targetUserId })
             .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            })
             .sort({ createdAt: -1 });
 
         const viewerId = getViewerId(req);
@@ -331,6 +415,10 @@ exports.getSavedPosts = async (req, res) => {
 
         const posts = await Post.find({ savedBy: viewerId })
             .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            })
             .sort({ createdAt: -1 });
 
         res.json(posts.map(p => formatPost(p, viewerId, new Set())));
@@ -349,6 +437,10 @@ exports.getLikedPosts = async (req, res) => {
 
         const posts = await Post.find({ likedUsers: viewerId })
             .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            })
             .sort({ createdAt: -1 });
 
         res.json(posts.map(p => formatPost(p, viewerId, new Set())));
@@ -367,6 +459,10 @@ exports.getCommentedPosts = async (req, res) => {
 
         const posts = await Post.find({ 'comments.authorId': viewerId })
             .populate('userId', 'name firstName lastName profilePic role')
+            .populate({
+                path: 'repostOf',
+                populate: { path: 'userId', select: 'name firstName lastName profilePic role' },
+            })
             .sort({ createdAt: -1 });
 
         res.json(posts.map(p => formatPost(p, viewerId, new Set())));
@@ -454,6 +550,28 @@ exports.getProfileStats = async (req, res) => {
         res.json({ postCount, totalLikes, followerCount, followingCount });
     } catch (err) {
         console.error('[Feed PROFILE STATS]', err.message);
+        res.status(500).send('Server error');
+    }
+};
+
+// ── DELETE /api/feed/:id ───────────────────────────────────────
+// Only the post's own author can delete it — this is the "delete my
+// own post" option that should appear instead of a nonsensical
+// "follow yourself" option when viewing your own post's menu.
+exports.deletePost = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const post = await Post.findById(id);
+        if (!post) return res.status(404).json({ msg: 'Post not found.' });
+
+        if (post.userId.toString() !== req.user.id.toString()) {
+            return res.status(403).json({ msg: 'You can only delete your own posts.' });
+        }
+
+        await Post.findByIdAndDelete(id);
+        res.json({ success: true, msg: 'Post deleted.' });
+    } catch (err) {
+        console.error('[Feed DELETE]', err.message);
         res.status(500).send('Server error');
     }
 };
