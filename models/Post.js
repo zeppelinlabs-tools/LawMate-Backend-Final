@@ -19,7 +19,6 @@ const PostSchema = new mongoose.Schema({
         url:  { type: String, required: true },
         type: { type: String, enum: ['image', 'video'], required: true }
     }],
-    tag:        { type: String, default: '' },
     likes:      { type: Number, default: 0 },
     likedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
 
@@ -39,6 +38,15 @@ const PostSchema = new mongoose.Schema({
         text:       { type: String, required: true },
         createdAt:  { type: Date, default: Date.now },
     }],
+
+    // Repost support — a repost is just a normal Post (so it shows up
+    // in the feed, gets liked/commented/saved the same way as any
+    // other post) that ALSO references the original post it's
+    // reposting. The repost's own `content` field holds the caption
+    // the person typed when resharing (can be empty — a bare reshare
+    // with no added comment is fine, same as Facebook/Twitter).
+    repostOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Post', default: null },
+    repostsCount: { type: Number, default: 0 }, // how many times THIS post has been reposted
 
     createdAt:  { type: Date, default: Date.now }
 });
