@@ -28,6 +28,8 @@ router.post('/', auth, feedController.createPost);
 router.post('/:id/like', auth, feedController.likePost);
 router.post('/:id/save',     auth, feedController.toggleSavePost);
 router.post('/:id/comments', auth, feedController.addComment);
+router.post('/:id/repost',   auth, feedController.createRepost);
+router.delete('/:id',        auth, feedController.deletePost);
 
 router.post('/follow/:userId',   auth, feedController.followUser);
 router.delete('/follow/:userId', auth, feedController.unfollowUser);
