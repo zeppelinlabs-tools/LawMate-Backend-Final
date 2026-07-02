@@ -74,12 +74,23 @@ exports.addMessage = async (req, res) => {
             return res.status(404).json({ msg: 'Session not found' });
         }
 
+        // If a real file was uploaded alongside this message (multer
+        // populates req.file when the request is multipart/form-data),
+        // save its actual hosted URL — this is what's missing before:
+        // attachmentType/attachmentName were always saved as plain
+        // labels with no real file behind them.
+        let fileUrl = null;
+        if (req.file) {
+            fileUrl = `/documents/${req.file.filename}`;
+        }
+
         // Add the message
         session.messages.push({
             role,
             text:           text           || '',
             attachmentType: attachmentType || null,
             attachmentName: attachmentName || null,
+            fileUrl,
             timestamp:      new Date()
         });
 
