@@ -22,6 +22,28 @@ const MODEL = 'claude-sonnet-4-6';
  * @param {string} lawLink - Original government link
  * @returns {object} enriched data object
  */
+// Escapes raw newline/tab/carriage-return characters, but only when they
+// appear inside a JSON string literal (tracked by toggling on unescaped
+// double-quotes) — control characters outside strings are legitimate
+// JSON whitespace and must be left alone.
+function sanitizeControlCharsInJsonStrings(str) {
+    let result = '';
+    let inString = false;
+    let prevChar = '';
+    for (const char of str) {
+        if (char === '"' && prevChar !== '\\') {
+            inString = !inString;
+            result += char;
+        } else if (inString && (char === '\n' || char === '\r' || char === '\t')) {
+            result += char === '\n' ? '\\n' : char === '\r' ? '\\r' : '\\t';
+        } else {
+            result += char;
+        }
+        prevChar = char;
+    }
+    return result;
+}
+
 async function enrichLaw(lawTitle, source, lawLink) {
     if (!ANTHROPIC_API_KEY) {
         throw new Error('ANTHROPIC_API_KEY is not set in environment variables.');
@@ -99,17 +121,29 @@ Rules:
     try {
         parsed = JSON.parse(cleaned);
     } catch (e) {
-        // Distinguish "ran out of tokens mid-response" from "genuinely
-        // malformed JSON" — these need different fixes (raise
-        // max_tokens further vs. fix the prompt), so collapsing them
-        // into one generic parse error makes the real cause invisible
-        // when checking GET /:source/status later.
-        const truncated = data.stop_reason === 'max_tokens';
-        throw new Error(
-            truncated
-                ? `Response truncated (hit max_tokens limit) before completing valid JSON. First 300 chars: ${cleaned.slice(0, 300)}`
-                : `Failed to parse Claude response as JSON: ${cleaned.slice(0, 300)}`
-        );
+        // The prompt asks for "5-6 line" / "8-9 line" text, so Claude
+        // often writes multi-line summary/description values using literal
+        // line breaks instead of escaped "\n" — raw control characters
+        // inside a JSON string are invalid per spec and make JSON.parse
+        // throw on every single response that contains them (this was
+        // failing 100% of Sindh enrichments, not just an occasional one).
+        // Escape stray control characters, but only inside string
+        // literals, then retry before giving up.
+        try {
+            parsed = JSON.parse(sanitizeControlCharsInJsonStrings(cleaned));
+        } catch (e2) {
+            // Distinguish "ran out of tokens mid-response" from "genuinely
+            // malformed JSON" — these need different fixes (raise
+            // max_tokens further vs. fix the prompt), so collapsing them
+            // into one generic parse error makes the real cause invisible
+            // when checking GET /:source/status later.
+            const truncated = data.stop_reason === 'max_tokens';
+            throw new Error(
+                truncated
+                    ? `Response truncated (hit max_tokens limit) before completing valid JSON. First 300 chars: ${cleaned.slice(0, 300)}`
+                    : `Failed to parse Claude response as JSON: ${cleaned.slice(0, 300)}`
+            );
+        }
     }
 
     const VALID_CATEGORIES = [
