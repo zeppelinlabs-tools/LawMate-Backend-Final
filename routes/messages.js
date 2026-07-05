@@ -1,7 +1,9 @@
 const express = require('express');
 const router  = express.Router();
 const auth    = require('../middleware/authMiddleware');
-const ChatMessage = require('../models/ChatMessage');
+const ChatMessage  = require('../models/ChatMessage');
+const Notification = require('../models/Notification');
+const User         = require('../models/User');
 
 // GET /api/messages?engagementId=xxx
 router.get('/', auth, async (req, res) => {
@@ -33,6 +35,30 @@ router.post('/send', auth, async (req, res) => {
             attachmentName: attachmentName || '',
         });
         await msg.save();
+
+        // Notify the receiver about the new message
+        if (receiverId) {
+            try {
+                const sender = await User.findById(req.user.id).select('firstName lastName name role');
+                const senderName = sender
+                    ? `${sender.firstName || ''} ${sender.lastName || ''}`.trim() || sender.name || 'Someone'
+                    : 'Someone';
+                const preview = message
+                    ? (message.length > 60 ? message.substring(0, 60) + '...' : message)
+                    : (attachmentName ? `Sent an attachment: ${attachmentName}` : 'Sent you a message');
+                await Notification.create({
+                    userId:   receiverId,
+                    type:     'message',
+                    title:    `💬 New message from ${senderName}`,
+                    message:  preview,
+                    actionId: engagementId || '',
+                    isRead:   false,
+                });
+            } catch (notifErr) {
+                console.error('[Messages] Notification send failed:', notifErr.message);
+            }
+        }
+
         res.status(201).json({ success: true, message: msg });
     } catch (err) {
         res.status(500).json({ msg: 'Server error' });
