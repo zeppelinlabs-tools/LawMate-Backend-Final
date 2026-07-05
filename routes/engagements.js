@@ -18,6 +18,7 @@ const auth     = require('../middleware/authMiddleware');
 const { blockUnverifiedProfessional } = require('../middleware/verifiedOnly');
 const ctrl     = require('../controllers/engagementController');
 const CaseEngagement = require('../models/CaseEngagement');
+const Notification   = require('../models/Notification');
 
 // Safely require the attachment upload middleware — degrades to a no-op
 // passthrough if missing, matching the pattern used in routes/auth.js,
@@ -52,39 +53,50 @@ router.post('/process-payment',    auth, ctrl.processPayment);
 router.post('/complete',           auth, ctrl.completeEngagement);
 router.get ('/',                   auth, ctrl.getMyEngagements);
 // Toggle call access. Either side (the professional OR the client) can
-// flip their OWN flag — a real call is only allowed once BOTH flags are
-// true. req.user.id + the engagement's clientId/lawyerId/socialWorkerId
-// tell us which side is toggling, so the same endpoint works for both.
+// Call access toggle — ONLY the professional (lawyer/social worker) controls
+// this. Client has no toggle. Lawyer ON = client gets access to call.
+// Lawyer OFF = client loses access. clientCallEnabled mirrors professionalCallEnabled.
+// The lawyer can only call when they themselves have enabled it (they can't
+// leave it off and still call — that damages the logic of access control).
 router.put('/toggle-call/:engagementId', auth, async (req, res) => {
     try {
         const eng = await CaseEngagement.findById(req.params.engagementId);
         if (!eng) return res.status(404).json({ msg: 'Not found' });
 
         const viewerId = req.user.id.toString();
-        const isClient = eng.clientId?.toString() === viewerId;
         const isProfessional =
             eng.lawyerId?.toString() === viewerId ||
             eng.socialWorkerId?.toString() === viewerId;
 
-        if (!isClient && !isProfessional) {
-            return res.status(403).json({ msg: 'Not a participant in this engagement.' });
+        if (!isProfessional) {
+            return res.status(403).json({
+                msg: 'Only the lawyer or social worker can toggle call access.'
+            });
         }
 
-        if (isClient) {
-            eng.clientCallEnabled = !eng.clientCallEnabled;
-        } else {
-            eng.professionalCallEnabled = !eng.professionalCallEnabled;
-            eng.callEnabled = eng.professionalCallEnabled; // keep legacy flag in sync
-        }
-
+        // Lawyer flips their access — client access mirrors it automatically.
+        eng.professionalCallEnabled = !eng.professionalCallEnabled;
+        eng.clientCallEnabled       = eng.professionalCallEnabled;
+        eng.callEnabled             = eng.professionalCallEnabled;
         await eng.save();
+
+        // Notify client about the change
+        const accessMsg = eng.professionalCallEnabled
+            ? 'Your lawyer has enabled call access. You can now make audio and video calls.'
+            : 'Your lawyer has disabled call access.';
+        await Notification.create({
+            userId:  eng.clientId,
+            type:    'general',
+            title:   eng.professionalCallEnabled ? '📞 Call Access Enabled' : '📵 Call Access Disabled',
+            message: accessMsg,
+            isRead:  false
+        });
+
         res.json({
-            success: true,
+            success:                 true,
             professionalCallEnabled: eng.professionalCallEnabled,
             clientCallEnabled:       eng.clientCallEnabled,
-            // True only when both sides have switched call access on.
-            bothCallEnabled: eng.professionalCallEnabled && eng.clientCallEnabled,
-            callEnabled: eng.callEnabled, // legacy field, mirrors professional side
+            callEnabled:             eng.callEnabled,
         });
     } catch (err) {
         console.error('[Engagements TOGGLE CALL]', err.message);
