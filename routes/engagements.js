@@ -97,6 +97,7 @@ router.put('/toggle-call/:engagementId', auth, async (req, res) => {
             professionalCallEnabled: eng.professionalCallEnabled,
             clientCallEnabled:       eng.clientCallEnabled,
             callEnabled:             eng.callEnabled,
+            bothCallEnabled:         eng.professionalCallEnabled, // mirrors professional side — lawyer controls both
         });
     } catch (err) {
         console.error('[Engagements TOGGLE CALL]', err.message);
@@ -105,3 +106,4 @@ router.put('/toggle-call/:engagementId', auth, async (req, res) => {
 });
 
 module.exports = router;
+
