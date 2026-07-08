@@ -70,7 +70,10 @@ exports.register = async (req, res) => {
             workType, organization, fee, helpedCount, verificationMethod,
             // ── New structured lawyer verification fields ───────────────
             provincialBarCouncil, barRegistrationNumber, cnicNumber,
-            licenseLevel, isGeneralPractice, areasOfPractice
+            licenseLevel, isGeneralPractice, areasOfPractice,
+            // ── NGO-specific fields (when workType == 'organization') ───
+            helpline, alternatePhone, headOfficeAddress, website,
+            registrationNumber, verificationAuthority, focusAreas, supportedCities
         } = req.body;
 
         if (!email || !password)
@@ -146,6 +149,10 @@ exports.register = async (req, res) => {
                 }
                 cnicFrontBackUrl   = getFileUrl(req, 'cnicFrontBack') || '';
                 ngoRegistrationUrl = getFileUrl(req, 'ngoRegistration') || '';
+                // NGO registration documents
+                if (userRole === 'social_worker') {
+                    ngoRegistrationUrl = getFileUrl(req, 'registrationCert') || ngoRegistrationUrl;
+                }
             } catch (fileErr) {
                 console.error("[File Utility Error Handled]", fileErr.message);
             }
@@ -233,10 +240,82 @@ exports.register = async (req, res) => {
             ngoRegistrationUrl,
             fee:                fee               || 0,
             helpedCount:        helpedCount       || 0,
-            profilePic:         profilePicUrl
+            profilePic:         profilePicUrl,
+            // NGO-specific fields (only meaningful when workType == 'organization')
+            helpline:               helpline               || '',
+            alternatePhone:         alternatePhone         || '',
+            headOfficeAddress:      headOfficeAddress      || '',
+            website:                website                || '',
+            registrationNumber:     registrationNumber     || '',
+            verificationAuthority:  verificationAuthority  || '',
+            focusAreas:  Array.isArray(focusAreas)
+                            ? focusAreas
+                            : (typeof focusAreas === 'string' && focusAreas
+                                ? focusAreas.split(',').map(s => s.trim()).filter(Boolean) : []),
+            supportedCities: Array.isArray(supportedCities)
+                            ? supportedCities
+                            : (typeof supportedCities === 'string' && supportedCities
+                                ? supportedCities.split(',').map(s => s.trim()).filter(Boolean) : []),
         });
 
         await user.save();
+
+        // ── Auto-create NGO record for organization social workers ─────────
+        // When a social worker registers with workType: 'organization', we
+        // automatically create an Ngo record linked to their user account.
+        // This is what shows up in the NGO Hub for clients to browse.
+        if (userRole === 'social_worker' && workType === 'organization' && organization) {
+            try {
+                const { Ngo } = require('../models/Ngo');
+                const govtDocUrl = (typeof getFileUrl === 'function' && req.files)
+                    ? getFileUrl(req, 'govtRegistrationDoc') || ''
+                    : '';
+
+                const ngo = new Ngo({
+                    name:                  organization.trim(),
+                    subtitle:              `${workType === 'organization' ? 'Non-Profit Organization' : 'Social Welfare'}`,
+                    description:           bio || '',
+                    founderOrLeader:       `${cleanFirst} ${cleanLast}`.trim(),
+                    city:                  city || '',
+                    headOfficeAddress:     headOfficeAddress || '',
+                    address:               headOfficeAddress || city || '',
+                    phone:                 phone || '',
+                    helpline:              helpline || '',
+                    alternatePhone:        alternatePhone || '',
+                    email:                 email.toLowerCase().trim(),
+                    website:               website || '',
+                    logoUrl:               profilePicUrl || '',
+                    registrationNumber:    registrationNumber || '',
+                    registrationCertUrl:   ngoRegistrationUrl || '',
+                    govtRegistrationDocUrl: govtDocUrl,
+                    verificationAuthority: verificationAuthority || '',
+                    focusAreas:  Array.isArray(focusAreas)
+                                    ? focusAreas
+                                    : (typeof focusAreas === 'string' && focusAreas
+                                        ? focusAreas.split(',').map(s => s.trim()).filter(Boolean) : []),
+                    categories:  Array.isArray(focusAreas)
+                                    ? focusAreas
+                                    : (typeof focusAreas === 'string' && focusAreas
+                                        ? focusAreas.split(',').map(s => s.trim()).filter(Boolean) : []),
+                    supportedCities: Array.isArray(supportedCities)
+                                    ? supportedCities
+                                    : (typeof supportedCities === 'string' && supportedCities
+                                        ? supportedCities.split(',').map(s => s.trim()).filter(Boolean)
+                                        : (city ? [city] : [])),
+                    ownerId:    user._id,
+                    isActive:   true,
+                    isVerified: false, // requires admin verification
+                });
+                await ngo.save();
+
+                // Link back to user
+                user.ngoId = ngo._id;
+                await user.save();
+            } catch (ngoErr) {
+                // Don't fail registration if NGO creation fails — user account still created
+                console.error('[Register] Auto-NGO creation failed:', ngoErr.message);
+            }
+        }
 
         const otpCode  = generateOtp();
         const method   = verificationMethod || 'email';
