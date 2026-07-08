@@ -115,11 +115,12 @@ const uploadLawyerDocs = upload.fields([
     { name: 'profilePic',         maxCount: 1 }
 ]);
 
-// For social worker registration: ngoRegistration credential + optional
-// profile picture (same reasoning as uploadLawyerDocs above).
+// For social worker / NGO registration: all required documents + optional profile pic
 const uploadSocialWorkerDocs = upload.fields([
-    { name: 'ngoRegistration', maxCount: 1 },
-    { name: 'profilePic',     maxCount: 1 }
+    { name: 'ngoRegistration',    maxCount: 1 }, // legacy name kept for backward compat
+    { name: 'registrationCert',   maxCount: 1 }, // NGO registration certificate
+    { name: 'govtRegistrationDoc',maxCount: 1 }, // Government registration document
+    { name: 'profilePic',         maxCount: 1 },
 ]);
 
 // ── Helper: get file URL from uploaded files ──────────────────
