@@ -109,8 +109,8 @@ exports.register = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const userRole   = (role === 'user') ? 'user' : (role || 'client');
-        const isVerified = !['lawyer', 'social_worker'].includes(userRole);
-        const isActive   = !['lawyer', 'social_worker'].includes(userRole);
+        const isVerified = !['lawyer', 'social_worker', 'ngo'].includes(userRole);
+        const isActive   = !['lawyer', 'social_worker', 'ngo'].includes(userRole);
 
         let barCouncilCardUrl  = '';
         let cnicFrontBackUrl   = '';
@@ -260,11 +260,13 @@ exports.register = async (req, res) => {
 
         await user.save();
 
-        // ── Auto-create NGO record for organization social workers ─────────
-        // When a social worker registers with workType: 'organization', we
-        // automatically create an Ngo record linked to their user account.
-        // This is what shows up in the NGO Hub for clients to browse.
-        if (userRole === 'social_worker' && workType === 'organization' && organization) {
+        // ── Auto-create NGO record ─────────────────────────────────────────────
+        // For 'ngo' role: always create NGO record (they ARE the NGO)
+        // For 'social_worker' role with workType 'organization': create NGO record
+        const shouldCreateNgo = (userRole === 'ngo' && organization) ||
+                                 (userRole === 'social_worker' && workType === 'organization' && organization);
+
+        if (shouldCreateNgo) {
             try {
                 const { Ngo } = require('../models/Ngo');
                 const govtDocUrl = (typeof getFileUrl === 'function' && req.files)
@@ -273,7 +275,7 @@ exports.register = async (req, res) => {
 
                 const ngo = new Ngo({
                     name:                  organization.trim(),
-                    subtitle:              `${workType === 'organization' ? 'Non-Profit Organization' : 'Social Welfare'}`,
+                    subtitle:              userRole === 'ngo' ? 'Non-Profit Organization' : 'Social Welfare Organization',
                     description:           bio || '',
                     founderOrLeader:       `${cleanFirst} ${cleanLast}`.trim(),
                     city:                  city || '',
@@ -312,7 +314,6 @@ exports.register = async (req, res) => {
                 user.ngoId = ngo._id;
                 await user.save();
             } catch (ngoErr) {
-                // Don't fail registration if NGO creation fails — user account still created
                 console.error('[Register] Auto-NGO creation failed:', ngoErr.message);
             }
         }
