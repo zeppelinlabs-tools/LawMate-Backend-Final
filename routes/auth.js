@@ -31,6 +31,7 @@ router.put ('/profile',         auth, authController.updateProfile);
 router.put('/change-password', auth, authController.changePassword);
 router.post('/register/lawyer', uploadLawyerDocs, authController.register);
 router.post('/register/social-worker', uploadSocialWorkerDocs, authController.register);
+router.post('/register/ngo',           uploadSocialWorkerDocs, authController.register); // NGO uses same docs
 router.post('/forgot-password',        authController.forgotPassword);
 router.post('/reset-password',         authController.resetPassword);
 router.get('/search-user', auth, authController.searchUser);
