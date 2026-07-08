@@ -91,7 +91,7 @@ exports.getPendingProfessionals = async (req, res) => {
     if (!checkAdminSecret(req, res)) return;
     try {
         const pending = await User.find({
-            role:              { $in: ['lawyer', 'social_worker'] },
+            role:              { $in: ['lawyer', 'social_worker', 'ngo'] },
             isVerified:        false,
             isAccountVerified: true, // only show people who finished OTP — half-signed-up accounts aren't ready for review yet
         })
@@ -117,8 +117,8 @@ exports.setProfessionalVerification = async (req, res) => {
         const user = await User.findById(req.params.id);
 
         if (!user) return res.status(404).json({ msg: 'User not found.' });
-        if (!['lawyer', 'social_worker'].includes(user.role)) {
-            return res.status(400).json({ msg: 'Only lawyer/social_worker accounts go through this verification step.' });
+        if (!['lawyer', 'social_worker', 'ngo'].includes(user.role)) {
+            return res.status(400).json({ msg: 'Only lawyer/social_worker/ngo accounts go through this verification step.' });
         }
 
         user.isVerified = approve === true || approve === 'true';
