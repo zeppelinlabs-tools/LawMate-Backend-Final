@@ -79,6 +79,18 @@ const UserSchema = new mongoose.Schema({
     workType:            { type: String, default: '' },
     organization:        { type: String, default: '' },
     ngoRegistrationUrl:  { type: String, default: '' },
+    // Additional NGO fields — filled when workType == 'organization'
+    helpline:            { type: String, default: '' },
+    alternatePhone:      { type: String, default: '' },
+    headOfficeAddress:   { type: String, default: '' },
+    website:             { type: String, default: '' },
+    registrationNumber:  { type: String, default: '' },
+    govtRegistrationDocUrl: { type: String, default: '' },
+    verificationAuthority:  { type: String, default: '' },
+    focusAreas:          { type: [String], default: [] },
+    supportedCities:     { type: [String], default: [] },
+    // Reference to the linked NGO record (set when NGO auto-created on registration)
+    ngoId:               { type: require('mongoose').Schema.Types.ObjectId, ref: 'Ngo', default: null },
     fee:                 { type: Number, default: 0 },
     helpedCount:         { type: Number, default: 0 },
     withdrawableBalance: { type: Number, default: 0 },
