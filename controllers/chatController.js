@@ -176,6 +176,16 @@ exports.initializeInquiryChat = async (req, res) => {
         const application = await NgoApplication.findById(applicationId).populate('ngoId');
         if (!application) return res.status(404).json({ msg: 'Application not found.' });
 
+        // Self-heal: some application documents can have ngoUserId unset
+        // (created before it was reliably populated, or edited directly
+        // during testing). Left unfixed, this rejects the NGO's own staff
+        // as unauthorized below. ngoId is already populated above, so this
+        // is a free repair with no extra query.
+        if (!application.ngoUserId && application.ngoId?.ownerId) {
+            application.ngoUserId = application.ngoId.ownerId;
+            await application.save();
+        }
+
         const isClient = application.applicantId.toString() === req.user.id.toString();
         const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
         if (!isClient && !isNgo) return res.status(403).json({ msg: 'Not authorized.' });
@@ -215,6 +225,11 @@ exports.initializeCaseChat = async (req, res) => {
 
         const application = await NgoApplication.findById(applicationId).populate('ngoId');
         if (!application) return res.status(404).json({ msg: 'Application not found.' });
+
+        if (!application.ngoUserId && application.ngoId?.ownerId) {
+            application.ngoUserId = application.ngoId.ownerId;
+            await application.save();
+        }
 
         const isClient = application.applicantId.toString() === req.user.id.toString();
         const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
