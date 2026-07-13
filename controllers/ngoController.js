@@ -1,6 +1,18 @@
 const { Ngo, NgoApplication, NgoCaseTracking } = require('../models/Ngo');
-const Notification = require('../models/Notification');
-const User         = require('../models/User');
+const Notification      = require('../models/Notification');
+const User               = require('../models/User');
+const DocumentVaultItem  = require('../models/DocumentVaultItem');
+const fs                 = require('fs');
+const path               = require('path');
+
+let getSingleFileUrl, classifyFileType;
+try {
+    const uploadMiddleware = require('../middleware/uploadMiddleware');
+    getSingleFileUrl = uploadMiddleware.getSingleFileUrl;
+    classifyFileType = uploadMiddleware.classifyFileType;
+} catch (e) {
+    console.error('[NgoController] uploadMiddleware import skipped:', e.message);
+}
 
 // ── Helper: send notification ───────────────────────────────────
 async function notify(userId, type, title, message, actionId = '') {
@@ -103,7 +115,11 @@ exports.applyToNgo = async (req, res) => {
         const {
             ngoId, applicantName, applicantPhone, applicantEmail,
             applicantCnic, issueType, caseFocusCategory,
-            applicantMonthlyIncome, caseSummary, description, attachedDocuments
+            applicantMonthlyIncome, caseTitle, caseSummary, description, attachedDocuments,
+            cnicFrontUrl, cnicBackUrl, serviceType,
+            currentLawyerInfo, courtDocumentUrls,
+            employerName, incomeSlipUrls, courtFeeInvoiceUrls,
+            missingDocumentType, supportingFamilyPaperUrls
         } = req.body;
 
         if (!ngoId)        return res.status(400).json({ msg: 'ngoId is required.' });
@@ -114,6 +130,10 @@ exports.applyToNgo = async (req, res) => {
         if (!applicantMonthlyIncome)
             return res.status(400).json({ msg: 'Monthly income is required.' });
 
+        const validServiceTypes = ['', 'representation', 'financial_aid', 'mediation', 'civil_identity'];
+        if (serviceType && !validServiceTypes.includes(serviceType))
+            return res.status(400).json({ msg: 'Invalid serviceType.' });
+
         const ngo = await Ngo.findById(ngoId);
         if (!ngo) return res.status(404).json({ msg: 'NGO not found.' });
         if (!ngo.isActive)
@@ -123,7 +143,7 @@ exports.applyToNgo = async (req, res) => {
         const existing = await NgoApplication.findOne({
             ngoId,
             applicantId: req.user.id,
-            status: { $in: ['pending', 'under_review', 'accepted'] }
+            status: { $in: ['pending', 'under_review', 'inquiry', 'accepted'] }
         });
         if (existing)
             return res.status(409).json({
@@ -145,9 +165,20 @@ exports.applyToNgo = async (req, res) => {
             issueType:              issueType              || '',
             caseFocusCategory:      caseFocusCategory      || '',
             applicantMonthlyIncome: applicantMonthlyIncome || '',
+            caseTitle:              caseTitle              || '',
             caseSummary:            caseSummary.trim(),
             description:            description            || '',
             attachedDocuments:      Array.isArray(attachedDocuments) ? attachedDocuments : [],
+            cnicFrontUrl:           cnicFrontUrl           || '',
+            cnicBackUrl:            cnicBackUrl            || '',
+            serviceType:            serviceType            || '',
+            currentLawyerInfo:      currentLawyerInfo      || '',
+            courtDocumentUrls:      Array.isArray(courtDocumentUrls) ? courtDocumentUrls : [],
+            employerName:           employerName           || '',
+            incomeSlipUrls:         Array.isArray(incomeSlipUrls) ? incomeSlipUrls : [],
+            courtFeeInvoiceUrls:    Array.isArray(courtFeeInvoiceUrls) ? courtFeeInvoiceUrls : [],
+            missingDocumentType:    missingDocumentType    || '',
+            supportingFamilyPaperUrls: Array.isArray(supportingFamilyPaperUrls) ? supportingFamilyPaperUrls : [],
             referenceId,
             status: 'pending'
         });
@@ -215,6 +246,67 @@ exports.getIncomingApplications = async (req, res) => {
     }
 };
 
+// ── PUT /api/ngos/applications/:id/advance ────────────────────────
+// Social worker moves an application forward through the pre-decision
+// stages of the lifecycle: pending -> under_review -> inquiry. The final
+// accept/reject decision still goes through respondToApplication above —
+// this endpoint only handles the two forward steps before that decision,
+// and specifically opens the temporary Inquiry Chat once the application
+// reaches 'inquiry'.
+exports.advanceApplicationStatus = async (req, res) => {
+    try {
+        const { toStatus } = req.body;
+        const allowedTargets = ['under_review', 'inquiry'];
+        if (!allowedTargets.includes(toStatus))
+            return res.status(400).json({ msg: `toStatus must be one of: ${allowedTargets.join(', ')}` });
+
+        const application = await NgoApplication.findById(req.params.id).populate('ngoId');
+        if (!application) return res.status(404).json({ msg: 'Application not found.' });
+
+        if (application.ngoId?.ownerId?.toString() !== req.user.id.toString())
+            return res.status(403).json({ msg: 'Not authorized.' });
+
+        // Enforce forward-only movement through the lifecycle:
+        // pending -> under_review -> inquiry. Cannot skip stages or move
+        // backwards, and cannot advance a case that's already been decided.
+        const order = { pending: 0, under_review: 1, inquiry: 2 };
+        if (!(toStatus in order))
+            return res.status(400).json({ msg: 'Invalid target status.' });
+        if (!(application.status in order))
+            return res.status(400).json({ msg: `Cannot advance — current status is ${application.status}` });
+        if (order[toStatus] !== order[application.status] + 1)
+            return res.status(400).json({ msg: `Cannot move from ${application.status} directly to ${toStatus}.` });
+
+        application.status    = toStatus;
+        application.updatedAt = new Date();
+        await application.save();
+
+        if (toStatus === 'inquiry') {
+            await notify(
+                application.applicantId,
+                'connection',
+                `💬 Screening Started — ${application.ngoId.name}`,
+                `${application.ngoId.name} has opened a screening chat for your application. You can now message them directly.`,
+                application._id.toString()
+            );
+        }
+
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${application._id}`, 'application:status-changed', {
+                applicationId: application._id, status: toStatus
+            });
+        } catch (socketErr) {
+            console.error('[NGO Advance] Socket emit failed:', socketErr.message);
+        }
+
+        res.json({ success: true, application });
+    } catch (err) {
+        console.error('[NGO Advance]', err.message);
+        res.status(500).send('Server error');
+    }
+};
+
 // ── PUT /api/ngos/applications/:id/respond ───────────────────────
 // Social worker accepts or rejects an application.
 // On acceptance, creates a case tracking record automatically.
@@ -231,7 +323,7 @@ exports.respondToApplication = async (req, res) => {
         if (application.ngoId?.ownerId?.toString() !== req.user.id.toString())
             return res.status(403).json({ msg: 'Not authorized.' });
 
-        if (application.status !== 'pending' && application.status !== 'under_review')
+        if (!['pending', 'under_review', 'inquiry'].includes(application.status))
             return res.status(400).json({ msg: `Cannot respond — current status is ${application.status}` });
 
         const clientName = application.applicantId
@@ -274,6 +366,20 @@ exports.respondToApplication = async (req, res) => {
                 application._id.toString()
             );
 
+            // Real-time: lock the inquiry chat and announce the new case
+            // workspace to anyone with either screen open right now.
+            try {
+                const { emitToRoom } = require('../services/socketService');
+                emitToRoom(`ngochat:${application._id}:inquiry`, 'inquiry:closed', {
+                    applicationId: application._id, reason: 'accepted'
+                });
+                emitToRoom(`ngocase:${application._id}`, 'case:opened', {
+                    applicationId: application._id, trackingId: tracking._id
+                });
+            } catch (socketErr) {
+                console.error('[NGO Respond] Socket emit failed:', socketErr.message);
+            }
+
             res.json({
                 success:    true,
                 msg:        'Application accepted. Case tracking created.',
@@ -295,6 +401,15 @@ exports.respondToApplication = async (req, res) => {
                     : `Your application could not be accepted at this time.`,
                 application._id.toString()
             );
+
+            try {
+                const { emitToRoom } = require('../services/socketService');
+                emitToRoom(`ngochat:${application._id}:inquiry`, 'inquiry:closed', {
+                    applicationId: application._id, reason: 'rejected'
+                });
+            } catch (socketErr) {
+                console.error('[NGO Respond] Socket emit failed:', socketErr.message);
+            }
 
             res.json({ success: true, msg: 'Application rejected.', application });
         }
@@ -338,11 +453,23 @@ exports.updateMilestone = async (req, res) => {
             return res.status(403).json({ msg: 'Not authorized.' });
 
         if (milestoneIndex >= 0 && milestoneIndex < tracking.milestones.length) {
-            tracking.milestones[milestoneIndex].status = status || 'done';
+            tracking.milestones[milestoneIndex].status         = status || 'done';
+            tracking.milestones[milestoneIndex].updatedByNgoAt = new Date();
             if (date) tracking.milestones[milestoneIndex].date = new Date(date);
         }
         tracking.updatedAt = new Date();
         await tracking.save();
+
+        // Real-time: the client's Milestone Tracker tab updates instantly
+        // without needing to poll or re-open the screen.
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${tracking.applicationId}`, 'milestone:updated', {
+                trackingId: tracking._id, milestones: tracking.milestones
+            });
+        } catch (socketErr) {
+            console.error('[NGO Milestone] Socket emit failed:', socketErr.message);
+        }
 
         // Notify client about milestone update
         const milestone = tracking.milestones[milestoneIndex];
@@ -375,6 +502,15 @@ exports.updateCaseStatus = async (req, res) => {
         tracking.status    = status;
         tracking.updatedAt = new Date();
         await tracking.save();
+
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${tracking.applicationId}`, 'case:status-updated', {
+                trackingId: tracking._id, status
+            });
+        } catch (socketErr) {
+            console.error('[NGO CaseStatus] Socket emit failed:', socketErr.message);
+        }
 
         await notify(
             tracking.clientId,
@@ -453,5 +589,125 @@ exports.verifyNgo = async (req, res) => {
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
+    }
+};
+
+// ── Shared Vault (Case Workspace Tab 2) ─────────────────────────
+// Reuses the same DocumentVaultItem collection and real-time pattern
+// already built for lawyer/social-worker engagements (see
+// documentVaultController.js) — scoped here by applicationId instead of
+// engagementId. Kept as separate functions (rather than generalizing
+// documentVaultController.js itself) so the already-working engagement
+// vault is not touched by this change at all.
+
+// Confirms the requester is either the client or the NGO worker on this
+// case, and returns the NgoCaseTracking record if so.
+async function authorizeOnCase(applicationId, userId) {
+    const tracking = await NgoCaseTracking.findOne({ applicationId });
+    if (!tracking) return null;
+    const isClient = tracking.clientId?.toString() === userId.toString();
+    const isNgo    = tracking.ngoUserId?.toString() === userId.toString();
+    if (!isClient && !isNgo) return null;
+    return tracking;
+}
+
+// ── GET /api/ngos/case-tracking/:applicationId/documents ─────────
+exports.listCaseDocuments = async (req, res) => {
+    try {
+        const { applicationId } = req.params;
+        const tracking = await authorizeOnCase(applicationId, req.user.id);
+        if (!tracking) return res.status(403).json({ msg: 'Not authorized to view this case\'s documents.' });
+
+        const files = await DocumentVaultItem.find({ applicationId })
+            .populate('uploadedBy', 'name firstName lastName profilePic')
+            .sort({ createdAt: -1 });
+
+        res.json({ success: true, files });
+    } catch (err) {
+        console.error('[listCaseDocuments]', err.message);
+        res.status(500).json({ msg: 'Server error', error: err.message });
+    }
+};
+
+// ── POST /api/ngos/case-tracking/:applicationId/documents ────────
+// Upload one file (field name 'file') into the case's Shared Vault.
+exports.uploadCaseDocument = async (req, res) => {
+    try {
+        const { applicationId } = req.params;
+        const tracking = await authorizeOnCase(applicationId, req.user.id);
+        if (!tracking) return res.status(403).json({ msg: 'Not authorized to upload to this case.' });
+
+        if (!req.file) {
+            return res.status(400).json({ msg: 'No file was uploaded. Expected field name "file".' });
+        }
+
+        const fileUrl  = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
+        const fileType = typeof classifyFileType === 'function'
+            ? classifyFileType(req.file.originalname)
+            : 'document';
+
+        const item = await DocumentVaultItem.create({
+            applicationId,
+            uploadedBy:    req.user.id,
+            fileName:      req.file.originalname,
+            fileUrl,
+            fileType,
+            fileSizeBytes: req.file.size || 0
+        });
+
+        const populated = await DocumentVaultItem.findById(item._id)
+            .populate('uploadedBy', 'name firstName lastName profilePic');
+
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${applicationId}`, 'vault:file-added', populated);
+        } catch (socketErr) {
+            console.error('[uploadCaseDocument] Socket emit failed:', socketErr.message);
+        }
+
+        res.status(201).json({ success: true, file: populated });
+    } catch (err) {
+        console.error('[uploadCaseDocument]', err.message);
+        res.status(500).json({ msg: 'Server error', error: err.message });
+    }
+};
+
+// ── DELETE /api/ngos/case-tracking/:applicationId/documents/:fileId ──
+// Only the original uploader may delete their own file — a client cannot
+// delete an NGO-uploaded file and vice versa.
+exports.deleteCaseDocument = async (req, res) => {
+    try {
+        const { applicationId, fileId } = req.params;
+        const tracking = await authorizeOnCase(applicationId, req.user.id);
+        if (!tracking) return res.status(403).json({ msg: 'Not authorized to modify this case\'s documents.' });
+
+        const item = await DocumentVaultItem.findOne({ _id: fileId, applicationId });
+        if (!item) return res.status(404).json({ msg: 'File not found in this case.' });
+
+        if (item.uploadedBy.toString() !== req.user.id.toString())
+            return res.status(403).json({ msg: 'Only the person who uploaded this file can delete it.' });
+
+        try {
+            if (item.fileUrl && item.fileUrl.startsWith('/documents/')) {
+                const diskPath = path.join(__dirname, '..', 'uploads', 'documents', path.basename(item.fileUrl));
+                if (fs.existsSync(diskPath)) fs.unlinkSync(diskPath);
+            }
+        } catch (diskErr) {
+            console.error('[deleteCaseDocument] Disk cleanup failed:', diskErr.message);
+        }
+
+        await DocumentVaultItem.deleteOne({ _id: fileId });
+
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${applicationId}`, 'vault:file-deleted', { fileId });
+        } catch (socketErr) {
+            console.error('[deleteCaseDocument] Socket emit failed:', socketErr.message);
+        }
+
+        res.json({ success: true, msg: 'File deleted from the Shared Vault.' });
+    } catch (err) {
+        console.error('[deleteCaseDocument]', err.message);
+        res.status(500).json({ msg: 'Server error', error: err.message });
     }
 };
