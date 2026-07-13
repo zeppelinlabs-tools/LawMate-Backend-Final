@@ -32,6 +32,10 @@ router.post  ('/sessions/:sessionId/messages',  auth, uploadSingleAttachment, ct
 router.put   ('/sessions/:sessionId',           auth, ctrl.updateSession);
 router.delete('/sessions/:sessionId',           auth, ctrl.deleteSession);
 
+// ── NGO Case Workspace dual-chat ─────────────────────────────────
+router.post  ('/inquiry/initialize',            auth, ctrl.initializeInquiryChat);
+router.post  ('/case/initialize',               auth, ctrl.initializeCaseChat);
+
 // ── Legacy endpoints ───────────────────────────────────────────
 router.post  ('/',         auth, ctrl.sendMessage);
 router.get   ('/history',  auth, ctrl.history);
