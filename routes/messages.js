@@ -4,7 +4,7 @@ const auth    = require('../middleware/authMiddleware');
 const ChatMessage      = require('../models/ChatMessage');
 const Notification     = require('../models/Notification');
 const User              = require('../models/User');
-const { NgoApplication } = require('../models/Ngo');
+const { Ngo, NgoApplication } = require('../models/Ngo');
 
 // GET /api/messages?engagementId=xxx
 // GET /api/messages?applicationId=xxx&phase=inquiry|case
@@ -13,6 +13,11 @@ router.get('/', auth, async (req, res) => {
         const { engagementId, applicationId, phase } = req.query;
         let query;
         if (applicationId) {
+            const application = await NgoApplication.findById(applicationId);
+            if (!application) return res.status(404).json({ msg: 'Application not found.' });
+            const isClient = application.applicantId.toString() === req.user.id.toString();
+            const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
+            if (!isClient && !isNgo) return res.status(403).json({ msg: 'Not authorized.' });
             query = { applicationId };
             if (phase) query.phase = phase;
         } else if (engagementId) {
@@ -44,8 +49,24 @@ router.post('/send', auth, async (req, res) => {
         let phase = '';
         let resolvedReceiverId = receiverId;
         if (applicationId) {
-            const application = await NgoApplication.findById(applicationId);
+            let application = await NgoApplication.findById(applicationId);
             if (!application) return res.status(404).json({ msg: 'Application not found.' });
+
+            // Defensive self-heal: some application documents (created
+            // before ngoUserId was reliably populated, or edited directly
+            // during testing) can have ngoUserId unset. Left unfixed, this
+            // makes the isNgo authorization check below reject the NGO's
+            // OWN staff as unauthorized, and separately would leave
+            // ChatMessage's required receiverId empty. Repair it from the
+            // Ngo record's ownerId up front, once, rather than letting
+            // either failure surface as an opaque 403/500.
+            if (!application.ngoUserId) {
+                const ngo = await Ngo.findById(application.ngoId);
+                if (ngo?.ownerId) {
+                    application.ngoUserId = ngo.ownerId;
+                    await application.save();
+                }
+            }
 
             const isClient = application.applicantId.toString() === req.user.id.toString();
             const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
@@ -54,6 +75,12 @@ router.post('/send', auth, async (req, res) => {
             // The other party is always the receiver on an application
             // thread — no need to make the frontend work this out.
             resolvedReceiverId = isClient ? application.ngoUserId : application.applicantId;
+
+            if (!resolvedReceiverId) {
+                return res.status(500).json({
+                    msg: 'This case is missing its NGO contact and could not be repaired automatically. Please contact support with reference ' + (application.referenceId || application._id) + '.'
+                });
+            }
 
             if (application.status === 'inquiry') {
                 phase = 'inquiry';
