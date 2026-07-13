@@ -14,13 +14,50 @@ const NgoApplicationSchema = new mongoose.Schema({
     applicantMonthlyIncome: { type: String, default: '' },
     issueType:              { type: String, default: '' },
     caseFocusCategory:      { type: String, default: '' },
+    // Step 1 of the intake wizard — short title shown in list views,
+    // distinct from caseSummary (the fuller narrative description).
+    caseTitle:               { type: String, default: '' },
     caseSummary:            { type: String, required: true },
     description:            { type: String, default: '' },
     attachedDocuments:      { type: [String], default: [] }, // file URLs
+
+    // Step 1 universal documents (every service type requires these).
+    cnicFrontUrl:            { type: String, default: '' },
+    cnicBackUrl:              { type: String, default: '' },
+
+    // Step 2 — which of the 4 legal aid tracks this application is for.
+    // Drives which Step 3 fields below are actually relevant/shown.
+    serviceType: {
+        type: String,
+        enum: ['', 'representation', 'financial_aid', 'mediation', 'civil_identity'],
+        default: ''
+    },
+
+    // Step 3 — conditional fields, populated depending on serviceType.
+    // Representation / Mediation:
+    currentLawyerInfo:       { type: String, default: '' },
+    courtDocumentUrls:       { type: [String], default: [] }, // court summons / police reports
+
+    // Financial Aid:
+    employerName:            { type: String, default: '' },
+    incomeSlipUrls:          { type: [String], default: [] },
+    courtFeeInvoiceUrls:     { type: [String], default: [] },
+
+    // Civil Identity:
+    missingDocumentType:     { type: String, default: '' },
+    supportingFamilyPaperUrls: { type: [String], default: [] },
+
     referenceId:            { type: String, default: '' },
     status: {
         type:    String,
-        enum:    ['pending', 'under_review', 'accepted', 'rejected'],
+        // Pending -> Under_Review -> Inquiry -> Accepted (Approved) / Rejected.
+        // 'accepted' is kept as the terminal-success value (rather than
+        // renaming to 'approved') since every existing screen, controller
+        // check, and notification already reads status === 'accepted' —
+        // renaming it would be a much larger, riskier change for no
+        // functional gain. 'inquiry' is the new intermediate screening
+        // stage this refactor adds.
+        enum:    ['pending', 'under_review', 'inquiry', 'accepted', 'rejected'],
         default: 'pending'
     },
     rejectionReason:        { type: String, default: '' },
@@ -49,8 +86,20 @@ const NgoCaseTrackingSchema = new mongoose.Schema({
         title:       { type: String, required: true },
         description: { type: String, default: '' },
         status:      { type: String, enum: ['pending', 'done'], default: 'pending' },
-        date:        { type: Date, default: Date.now }
+        date:        { type: Date, default: Date.now },
+        // Stamped whenever the NGO side toggles this milestone, so the
+        // client-facing timeline can show exactly when the update happened
+        // (distinct from `date`, which can be a manually-set target/event
+        // date rather than the moment of the status change itself).
+        updatedByNgoAt: { type: Date, default: null }
     }],
+    // NOTE: file storage for a case now lives in the shared DocumentVaultItem
+    // collection (models/DocumentVaultItem.js), scoped by applicationId —
+    // the same real-time, per-uploader-owned system already used for
+    // lawyer/social-worker engagements. This inline `documents` array is
+    // kept only so any pre-existing records written before this change
+    // still read back without a schema error; new uploads go through
+    // DocumentVaultItem via POST /api/ngos/case-tracking/:id/documents.
     documents: [{
         name:        { type: String, required: true },
         fileUrl:     { type: String, required: true },
