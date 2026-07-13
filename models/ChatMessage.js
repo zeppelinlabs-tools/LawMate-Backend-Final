@@ -16,6 +16,26 @@ const ChatMessageSchema = new mongoose.Schema({
         ref: 'CaseEngagement',
         default: null
     },
+    // NGO Case Workspace scope — set instead of/alongside engagementId when
+    // this message belongs to an NGO application's inquiry or case chat.
+    applicationId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'NgoApplication',
+        default: null,
+        index: true
+    },
+    // Only meaningful when applicationId is set. 'inquiry' = the temporary
+    // screening-phase thread (locked the moment the application leaves the
+    // 'inquiry' status). 'case' = the permanent thread that starts once the
+    // application is accepted. Kept as a separate discriminator (rather than
+    // inferring phase from the application's current status at read time)
+    // so inquiry-phase history stays readable and correctly labeled forever,
+    // even after the application later moves to accepted/rejected.
+    phase: {
+        type: String,
+        enum: ['', 'inquiry', 'case'],
+        default: ''
+    },
     message: {
         type: String,
         default: ''
