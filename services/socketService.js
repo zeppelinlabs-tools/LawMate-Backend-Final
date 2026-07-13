@@ -55,6 +55,20 @@ function initSocketServer(httpServer) {
             socket.leave(`engagement:${engagementId}`);
         });
 
+        // Generic room join/leave, used by the NGO Case Workspace (shared
+        // vault, milestone tracker, live chat) and the NGO inquiry chat.
+        // roomName is a plain string built by the caller, e.g.
+        // `ngocase:<applicationId>` or `ngochat:<applicationId>:inquiry`.
+        socket.on('room:join', (roomName) => {
+            if (!roomName) return;
+            socket.join(roomName);
+        });
+
+        socket.on('room:leave', (roomName) => {
+            if (!roomName) return;
+            socket.leave(roomName);
+        });
+
         socket.on('disconnect', () => {
             console.log(`[Socket] Disconnected: user ${socket.userId} (${socket.id})`);
         });
@@ -64,14 +78,21 @@ function initSocketServer(httpServer) {
     return io;
 }
 
+// Generic room broadcast — the NGO Case Workspace and chat features build
+// their own room name strings and call this directly, rather than adding
+// another engagement-shaped wrapper function per feature.
+function emitToRoom(roomName, event, payload) {
+    if (!io) {
+        console.warn('[Socket] emitToRoom called before initSocketServer — skipped.');
+        return;
+    }
+    io.to(roomName).emit(event, payload);
+}
+
 // Called by documentVaultController after a successful upload/delete so
 // every other client in that engagement's room gets the update instantly.
 function emitToEngagement(engagementId, event, payload) {
-    if (!io) {
-        console.warn('[Socket] emitToEngagement called before initSocketServer — skipped.');
-        return;
-    }
-    io.to(`engagement:${engagementId}`).emit(event, payload);
+    emitToRoom(`engagement:${engagementId}`, event, payload);
 }
 
-module.exports = { initSocketServer, emitToEngagement };
+module.exports = { initSocketServer, emitToEngagement, emitToRoom };
