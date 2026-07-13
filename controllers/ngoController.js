@@ -239,7 +239,21 @@ exports.getIncomingApplications = async (req, res) => {
             .populate('applicantId', 'name firstName lastName email phone profilePic')
             .sort({ createdAt: -1 });
 
-        res.json(applications);
+        // Flatten the populated applicant back into a plain ID string plus
+        // an explicit applicantProfilePic field. Previously this left
+        // applicantId as the populated object, which silently broke every
+        // consumer expecting applicantId to be a plain string (chat
+        // participant checks, hasAppliedTo, etc.) and never actually
+        // surfaced the profile picture the populate was fetching.
+        const result = applications.map(app => {
+            const obj = app.toObject();
+            const applicant = obj.applicantId;
+            obj.applicantId = applicant?._id ? applicant._id.toString() : obj.applicantId;
+            obj.applicantProfilePic = applicant?.profilePic || '';
+            return obj;
+        });
+
+        res.json(result);
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
