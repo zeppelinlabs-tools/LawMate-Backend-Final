@@ -7,6 +7,7 @@
 
 const ChatSession  = require('../models/ChatSession');
 const ChatMessage  = require('../models/ChatMessage');
+const { NgoApplication } = require('../models/Ngo');
 
 // ─────────────────────────────────────────────────────────────
 // 1. GET ALL SESSIONS FOR CURRENT USER
@@ -154,6 +155,87 @@ exports.updateSession = async (req, res) => {
         res.json(session);
     } catch (err) {
         console.error('[Chat updateSession]', err.message);
+        res.status(500).send('Server error');
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// 8. NGO INQUIRY CHAT — INITIALIZE
+// POST /api/chat/inquiry/initialize
+// Body: { applicationId }
+// Returns whether the temporary screening chat is currently open for
+// sending, plus its message history. isActive is always computed fresh
+// from the application's current status (never stored/cached) so it can
+// never drift out of sync with the actual lifecycle stage.
+// ─────────────────────────────────────────────────────────────
+exports.initializeInquiryChat = async (req, res) => {
+    try {
+        const { applicationId } = req.body;
+        if (!applicationId) return res.status(400).json({ msg: 'applicationId is required.' });
+
+        const application = await NgoApplication.findById(applicationId).populate('ngoId');
+        if (!application) return res.status(404).json({ msg: 'Application not found.' });
+
+        const isClient = application.applicantId.toString() === req.user.id.toString();
+        const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
+        if (!isClient && !isNgo) return res.status(403).json({ msg: 'Not authorized.' });
+
+        const isActive = application.status === 'inquiry';
+
+        const messages = await ChatMessage.find({ applicationId, phase: 'inquiry' })
+            .sort({ createdAt: 1 })
+            .limit(500);
+
+        res.json({
+            success: true,
+            applicationId,
+            isActive,
+            status: application.status,
+            room: `ngochat:${applicationId}:inquiry`,
+            messages
+        });
+    } catch (err) {
+        console.error('[Chat initializeInquiryChat]', err.message);
+        res.status(500).send('Server error');
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// 9. NGO CASE CHAT — INITIALIZE
+// POST /api/chat/case/initialize
+// Body: { applicationId }
+// Only succeeds once the application has actually been accepted — this
+// is the permanent thread for the lifetime of the case (Tab 1 of the
+// Case Workspace).
+// ─────────────────────────────────────────────────────────────
+exports.initializeCaseChat = async (req, res) => {
+    try {
+        const { applicationId } = req.body;
+        if (!applicationId) return res.status(400).json({ msg: 'applicationId is required.' });
+
+        const application = await NgoApplication.findById(applicationId).populate('ngoId');
+        if (!application) return res.status(404).json({ msg: 'Application not found.' });
+
+        const isClient = application.applicantId.toString() === req.user.id.toString();
+        const isNgo    = application.ngoUserId?.toString() === req.user.id.toString();
+        if (!isClient && !isNgo) return res.status(403).json({ msg: 'Not authorized.' });
+
+        if (application.status !== 'accepted')
+            return res.status(400).json({ msg: 'The case workspace chat is only available once this application has been accepted.' });
+
+        const messages = await ChatMessage.find({ applicationId, phase: 'case' })
+            .sort({ createdAt: 1 })
+            .limit(500);
+
+        res.json({
+            success: true,
+            applicationId,
+            isActive: true,
+            room: `ngochat:${applicationId}:case`,
+            messages
+        });
+    } catch (err) {
+        console.error('[Chat initializeCaseChat]', err.message);
         res.status(500).send('Server error');
     }
 };
