@@ -106,7 +106,16 @@ const NgoCaseTrackingSchema = new mongoose.Schema({
             label:          { type: String, required: true },
             isDone:         { type: Boolean, default: false },
             updatedByNgoAt: { type: Date, default: null },
-            createdAt:      { type: Date, default: Date.now }
+            createdAt:      { type: Date, default: Date.now },
+            // The client's own submission for this sub-step — e.g. the
+            // actual income slip file for a "Provide income slip"
+            // sub-step. Set only by the client (submitSubStepDocument);
+            // isDone above is still only ever set by the NGO, once they've
+            // opened and reviewed what the client submitted — submitting
+            // a file does not auto-complete the step.
+            submittedFileUrl: { type: String, default: '' },
+            submittedFileName:{ type: String, default: '' },
+            submittedAt:      { type: Date, default: null },
         }]
     }],
     // NOTE: file storage for a case now lives in the shared DocumentVaultItem
