@@ -560,6 +560,20 @@ exports.updateProfile = async (req, res) => {
             if (req.body[field] !== undefined) updateData[field] = req.body[field];
         });
 
+        // The Edit Profile sheet sends a picked image as an actual file
+        // (multipart field 'profilePic', parsed by uploadProfilePicSingle
+        // in routes/auth.js), not as a URL string in the JSON body — so
+        // req.file takes priority over any (currently unused) plain-string
+        // req.body.profilePic.
+        if (req.file) {
+            try {
+                const { getSingleFileUrl } = require('../middleware/uploadMiddleware');
+                updateData.profilePic = getSingleFileUrl(req);
+            } catch (e) {
+                console.error('[updateProfile] Could not resolve uploaded file URL:', e.message);
+            }
+        }
+
         // notificationPreferences is a nested sub-document — merge field by field
         // using dot-notation so a partial update (e.g. just {chatMessages:false})
         // never wipes out the sibling preference flags.
