@@ -11,6 +11,7 @@ const NgoApplicationSchema = new mongoose.Schema({
     applicantPhone:         { type: String, default: '' },
     applicantEmail:         { type: String, default: '' },
     applicantCnic:          { type: String, default: '' },
+    applicantAddress:       { type: String, default: '' },
     applicantMonthlyIncome: { type: String, default: '' },
     issueType:              { type: String, default: '' },
     caseFocusCategory:      { type: String, default: '' },
@@ -104,17 +105,24 @@ const NgoCaseTrackingSchema = new mongoose.Schema({
         // — see updateSubStep below.
         subSteps: [{
             label:          { type: String, required: true },
+            // What kind of proof this step requires from the client.
+            // 'document' — client must upload a file (existing behavior).
+            // 'text'     — client fills in a short written answer instead
+            // (e.g. "Confirm your current mailing address" doesn't need a
+            // scanned file). Set once by the NGO when creating the step.
+            type:           { type: String, enum: ['document', 'text'], default: 'document' },
             isDone:         { type: Boolean, default: false },
             updatedByNgoAt: { type: Date, default: null },
             createdAt:      { type: Date, default: Date.now },
             // The client's own submission for this sub-step — e.g. the
             // actual income slip file for a "Provide income slip"
-            // sub-step. Set only by the client (submitSubStepDocument);
-            // isDone above is still only ever set by the NGO, once they've
-            // opened and reviewed what the client submitted — submitting
-            // a file does not auto-complete the step.
+            // sub-step, or a typed answer for a 'text' step. Set only by
+            // the client (submitSubStepDocument); isDone above is still
+            // only ever set by the NGO, once they've opened and reviewed
+            // the submission — submitting does not auto-complete the step.
             submittedFileUrl: { type: String, default: '' },
             submittedFileName:{ type: String, default: '' },
+            submittedText:    { type: String, default: '' },
             submittedAt:      { type: Date, default: null },
         }]
     }],
@@ -164,6 +172,8 @@ const NgoSchema = new mongoose.Schema({
     registrationCertUrl:    { type: String, default: '' }, // uploaded certificate URL
     govtRegistrationDocUrl: { type: String, default: '' }, // government doc URL
     verificationAuthority:  { type: String, default: '' }, // e.g. "SECP", "Punjab Social Welfare Dept"
+    ntn:                    { type: String, default: '' }, // National Tax Number
+    registeredUnderAct:     { type: String, default: '' }, // e.g. "Societies Registration Act, 1860"
 
     // Coverage & categories
     focusAreas:             { type: [String], default: [] },
@@ -209,18 +219,22 @@ const CaseDocumentSchema = new mongoose.Schema({
     // ── NGO letterhead snapshot ──────────────────────────────
     ngoName:               { type: String, default: '' },
     ngoRegistrationNumber: { type: String, default: '' },
+    ngoRegisteredUnderAct: { type: String, default: '' },
+    ngoNtn:                { type: String, default: '' },
     ngoAddress:            { type: String, default: '' },
     ngoLogoUrl:            { type: String, default: '' },
 
-    // ── Client snapshot ───────────────────────────────────────
-    clientName:  { type: String, default: '' },
-    clientCnic:  { type: String, default: '' },
-    clientPhone: { type: String, default: '' },
-    clientEmail: { type: String, default: '' },
+    // ── Client / Beneficiary snapshot ──────────────────────────
+    clientName:    { type: String, default: '' },
+    clientCnic:    { type: String, default: '' },
+    clientPhone:   { type: String, default: '' },
+    clientEmail:   { type: String, default: '' },
+    clientAddress: { type: String, default: '' },
+    cnicVerified:  { type: Boolean, default: false },
 
     // ── Case details ──────────────────────────────────────────
     caseTitle:    { type: String, default: '' },
-    caseSummary:  { type: String, default: '' },
+    caseSummary:  { type: String, default: '' }, // the client's own original request/statement, verbatim
     serviceType:  { type: String, default: '' },
     referenceId:  { type: String, default: '' },
 
@@ -230,22 +244,59 @@ const CaseDocumentSchema = new mongoose.Schema({
     dateApplied:   { type: Date, required: true },
     dateGenerated: { type: Date, default: Date.now },
 
-    // What was actually done for the client, as free text the NGO fills
-    // in at generation time (e.g. "Represented client in labor tribunal
-    // proceedings and recovered PKR 120,000 in unpaid wages").
+    // Snapshot list of which document types were collected and verified
+    // during intake — built once at generation time.
+    documentsChecklist: { type: [String], default: [] },
+
+    // What the NGO formally committed to provide — the promise itself,
+    // distinct from resolutionSummary below (how it actually concluded).
+    approvedAssistanceCategory: { type: String, default: '' },
+    assistanceScope:            { type: String, default: '' },
+
+    // What was actually done for the client by the time the case closed.
     resolutionSummary: { type: String, default: '' },
 
-    // Optional — only relevant if a lawyer was engaged as part of this
-    // case. Left entirely blank/omitted from the rendered document when
-    // not applicable.
+    // ── Modular section A: Financial & Payment Aid — entirely omitted
+    // from the rendered document when amount is blank. ──
+    financialAid: {
+        amount:            { type: Number, default: null },
+        amountInWords:     { type: String, default: '' },
+        disbursementMode:  { type: String, default: '' }, // Cash / Bank Transfer / EasyPaisa / Cheque
+        transactionRef:    { type: String, default: '' },
+        purpose:           { type: String, default: '' },
+        // The NGO's OWN sending account — stated on the record so the
+        // document is checkable evidence later: if a client later claims
+        // they never received funds, this is the exact account the NGO
+        // itself declared as the source at the time, not just a bare
+        // transaction ID with nothing to trace it back to. Required
+        // (enforced in the controller) whenever an amount is set.
+        ngoAccountTitle:   { type: String, default: '' },
+        ngoAccountNumber:  { type: String, default: '' },
+        ngoBankName:       { type: String, default: '' },
+    },
+
+    // ── Modular section B: Legal Aid & Lawyer — entirely omitted from
+    // the rendered document when lawyerName is blank. ──
     lawyerAssigned: {
         name:               { type: String, default: '' },
         barNumber:          { type: String, default: '' },
+        courtName:          { type: String, default: '' },
+        caseNumberInCourt:  { type: String, default: '' },
         ngoPaysLawyer:      { type: Boolean, default: false },
+        feeAmount:          { type: Number, default: null },
         feeArrangementNote: { type: String, default: '' }
     },
 
+    // ── Modular section C: Social Advocacy & Public Representation —
+    // entirely omitted from the rendered document when advocacyScope is
+    // blank. ──
+    socialAdvocacy: {
+        advocacyScope: { type: String, default: '' },
+        mediaConsent:  { type: Boolean, default: false },
+    },
+
     // Optional extra agreement/terms text — entirely skippable by the NGO.
+    // Renders as "No additional terms apply" when blank.
     additionalAgreementNotes: { type: String, default: '' },
 
     // Message the NGO sends along when pushing the draft to the client
@@ -253,20 +304,29 @@ const CaseDocumentSchema = new mongoose.Schema({
     pushNote: { type: String, default: '' },
 
     // ── Signatures ────────────────────────────────────────────
-    // Lightweight typed-name e-signature with a timestamp, rather than a
-    // drawn signature pad — functionally equivalent as an attestation
-    // ("I, <name>, agree to and sign this document") and far more
-    // reliable across devices than canvas capture. signatureImageUrl is
-    // included as an optional upgrade path (e.g. an uploaded scanned
-    // signature) without being required.
+    // A real signature image (drawn on a signature pad in the app, saved
+    // as an image and uploaded) plus the typed name/title as the
+    // machine-readable record backing it — the image is what makes it a
+    // genuine signature rather than a bare typed attestation, the typed
+    // fields are what make it searchable/displayable without needing to
+    // decode the image. Both are required by the controller at push/sign
+    // time, not just optional extras.
     ngoSignerName:    { type: String, default: '' },
-    ngoSignerTitle:   { type: String, default: '' }, // e.g. "Head of NGO"
+    ngoSignerTitle:   { type: String, default: '' }, // e.g. "Head of NGO", "Executive Director"
     ngoSignedAt:      { type: Date, default: null },
     ngoSignatureUrl:  { type: String, default: '' },
 
     clientSignerName:   { type: String, default: '' },
     clientSignedAt:     { type: Date, default: null },
     clientSignatureUrl: { type: String, default: '' },
+
+    // Set true the first time each party actually taps "Download" —
+    // distinguishes the permanent "My Documents" library (only ever shows
+    // documents a party has actually chosen to keep) from every
+    // in-progress case document, which stays visible only inside its own
+    // case workspace until then.
+    downloadedByClient: { type: Boolean, default: false },
+    downloadedByNgo:    { type: Boolean, default: false },
 
     finalizedAt: { type: Date, default: null },
 
