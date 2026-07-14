@@ -30,8 +30,13 @@ const auth    = require('../middleware/authMiddleware');
 const ctrl    = require('../controllers/ngoController');
 
 let uploadVaultFile = (req, res, next) => next();
+let uploadNgoLogoSingle = (req, res, next) => next();
+let uploadSignatureSingle = (req, res, next) => next();
 try {
-    uploadVaultFile = require('../middleware/uploadMiddleware').uploadVaultFile;
+    const um = require('../middleware/uploadMiddleware');
+    uploadVaultFile = um.uploadVaultFile;
+    uploadNgoLogoSingle = um.uploadNgoLogoSingle;
+    uploadSignatureSingle = um.uploadSignatureSingle;
 } catch (e) {
     console.error('[NGO Routes] uploadMiddleware import skipped:', e.message);
 }
@@ -41,7 +46,7 @@ router.get('/', ctrl.getNgos);
 
 // ── Static routes BEFORE /:id ─────────────────────────────────────────────────
 router.get('/my',                          auth, ctrl.getMyNgo);
-router.put('/my',                          auth, ctrl.updateMyNgo);
+router.put('/my',                          auth, uploadNgoLogoSingle, ctrl.updateMyNgo);
 router.get('/applications/mine',           auth, ctrl.getMyApplications);
 router.get('/applications/incoming',       auth, ctrl.getIncomingApplications);
 router.put('/applications/:id/advance',    auth, ctrl.advanceApplicationStatus);
@@ -54,13 +59,16 @@ router.get('/case-tracking/:applicationId/progress',  auth, ctrl.getCaseProgress
 router.post  ('/case-tracking/:applicationId/milestone/:milestoneIndex/substep',              auth, ctrl.addSubStep);
 router.put   ('/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId',   auth, ctrl.toggleSubStep);
 router.delete('/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId',   auth, ctrl.deleteSubStep);
+router.post  ('/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId/submit', auth, uploadVaultFile, ctrl.submitSubStepDocument);
 
-router.post('/case-tracking/:applicationId/document/generate', auth, ctrl.generateCaseDocument);
-router.put ('/case-tracking/:applicationId/document',          auth, ctrl.updateCaseDocument);
-router.get ('/case-tracking/:applicationId/document',          auth, ctrl.getCaseDocument);
-router.post('/case-tracking/:applicationId/document/push',     auth, ctrl.pushCaseDocument);
-router.post('/case-tracking/:applicationId/document/sign',     auth, ctrl.signCaseDocument);
-router.post('/case-tracking/:applicationId/document/finalize', auth, ctrl.finalizeCaseDocument);
+router.get ('/my-case-documents',                               auth, ctrl.getMyCaseDocuments);
+router.post('/case-tracking/:applicationId/document/generate',  auth, ctrl.generateCaseDocument);
+router.put ('/case-tracking/:applicationId/document',           auth, ctrl.updateCaseDocument);
+router.get ('/case-tracking/:applicationId/document',           auth, ctrl.getCaseDocument);
+router.post('/case-tracking/:applicationId/document/push',      auth, uploadSignatureSingle, ctrl.pushCaseDocument);
+router.post('/case-tracking/:applicationId/document/sign',      auth, uploadSignatureSingle, ctrl.signCaseDocument);
+router.post('/case-tracking/:applicationId/document/finalize',  auth, ctrl.finalizeCaseDocument);
+router.post('/case-tracking/:applicationId/document/mark-downloaded', auth, ctrl.markDocumentDownloaded);
 
 // Shared Vault (Case Workspace Tab 2). These have one more path segment
 // than /case-tracking/:applicationId above, so they don't collide with
