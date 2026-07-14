@@ -8,10 +8,12 @@ const auth           = require('../middleware/authMiddleware');
 // crashing every auth route (registration, login, etc all live in this file).
 let uploadLawyerDocs = (req, res, next) => next();
 let uploadSocialWorkerDocs = (req, res, next) => next();
+let uploadProfilePicSingle = (req, res, next) => next();
 try {
     const mw = require('../middleware/uploadMiddleware');
     uploadLawyerDocs = mw.uploadLawyerDocs;
     uploadSocialWorkerDocs = mw.uploadSocialWorkerDocs;
+    uploadProfilePicSingle = mw.uploadProfilePicSingle;
 } catch (e) {
     console.error('[Auth Routes] uploadMiddleware import skipped:', e.message);
 }
@@ -26,8 +28,11 @@ router.post('/google-sync',     authController.googleSync);
 router.post('/verify-otp',      authController.verifyOtp);
 router.post('/resend-otp',      authController.resendOtp);
 router.get ('/me',              auth, authController.me);
-router.put ('/update-profile',  auth, authController.updateProfile);
-router.put ('/profile',         auth, authController.updateProfile);
+// Previously had no upload middleware at all, so a profile picture picked
+// in the Edit Profile sheet was silently dropped — only the text fields
+// in the same request ever saved.
+router.put ('/update-profile',  auth, uploadProfilePicSingle, authController.updateProfile);
+router.put ('/profile',         auth, uploadProfilePicSingle, authController.updateProfile);
 router.put('/change-password', auth, authController.changePassword);
 router.post('/register/lawyer', uploadLawyerDocs, authController.register);
 router.post('/register/social-worker', uploadSocialWorkerDocs, authController.register);
