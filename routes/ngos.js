@@ -47,8 +47,20 @@ router.get('/applications/incoming',       auth, ctrl.getIncomingApplications);
 router.put('/applications/:id/advance',    auth, ctrl.advanceApplicationStatus);
 router.put('/applications/:id/respond',    auth, ctrl.respondToApplication);
 router.get('/case-tracking/:applicationId',auth, ctrl.getCaseTracking);
-router.put('/case-tracking/:id/milestone', auth, ctrl.updateMilestone);
-router.put('/case-tracking/:id/status',    auth, ctrl.updateCaseStatus);
+router.put('/case-tracking/:applicationId/milestone', auth, ctrl.updateMilestone);
+router.put('/case-tracking/:applicationId/status',    auth, ctrl.updateCaseStatus);
+router.get('/case-tracking/:applicationId/progress',  auth, ctrl.getCaseProgress);
+
+router.post  ('/case-tracking/:applicationId/milestone/:milestoneIndex/substep',              auth, ctrl.addSubStep);
+router.put   ('/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId',   auth, ctrl.toggleSubStep);
+router.delete('/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId',   auth, ctrl.deleteSubStep);
+
+router.post('/case-tracking/:applicationId/document/generate', auth, ctrl.generateCaseDocument);
+router.put ('/case-tracking/:applicationId/document',          auth, ctrl.updateCaseDocument);
+router.get ('/case-tracking/:applicationId/document',          auth, ctrl.getCaseDocument);
+router.post('/case-tracking/:applicationId/document/push',     auth, ctrl.pushCaseDocument);
+router.post('/case-tracking/:applicationId/document/sign',     auth, ctrl.signCaseDocument);
+router.post('/case-tracking/:applicationId/document/finalize', auth, ctrl.finalizeCaseDocument);
 
 // Shared Vault (Case Workspace Tab 2). These have one more path segment
 // than /case-tracking/:applicationId above, so they don't collide with
