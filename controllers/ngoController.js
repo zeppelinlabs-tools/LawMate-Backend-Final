@@ -69,6 +69,66 @@ function buildDefaultMilestones(application) {
     return milestones;
 }
 
+// Snapshot list of which document types were actually collected during
+// intake, for the case document's "Legal & Verification Documents
+// Submitted" section. Built once at generation time.
+function buildDocumentsChecklist(application) {
+    const checklist = [];
+    if (application.cnicFrontUrl || application.cnicBackUrl) checklist.push('Verified CNIC Copy');
+    if ((application.courtDocumentUrls || []).length) checklist.push('Court Documents / Police Reports');
+    if ((application.incomeSlipUrls || []).length) checklist.push('Income Slips');
+    if ((application.courtFeeInvoiceUrls || []).length) checklist.push('Court Fee Invoices');
+    if ((application.supportingFamilyPaperUrls || []).length) checklist.push('Supporting Family Papers');
+    if ((application.attachedDocuments || []).length) checklist.push('Additional Attached Documents');
+    return checklist;
+}
+
+const SERVICE_TYPE_LABELS = {
+    representation:  'Legal Representation',
+    financial_aid:   'Financial Aid',
+    mediation:       'Mediation',
+    civil_identity:  'Civil Identity Documentation',
+};
+
+// Copies every document the client submitted during intake into the
+// Shared Vault (DocumentVaultItem, scoped by applicationId) as items the
+// client uploaded — called once when a case is accepted. Silently skips
+// anything already present (safe to call more than once, e.g. if this
+// were ever re-run manually for an older case).
+async function seedVaultFromApplication(application, applicationId) {
+    try {
+        const urls = [
+            application.cnicFrontUrl,
+            application.cnicBackUrl,
+            ...(application.courtDocumentUrls || []),
+            ...(application.incomeSlipUrls || []),
+            ...(application.courtFeeInvoiceUrls || []),
+            ...(application.supportingFamilyPaperUrls || []),
+            ...(application.attachedDocuments || []),
+        ].filter(Boolean);
+
+        if (!urls.length) return;
+
+        const existing = await DocumentVaultItem.find({ applicationId }).select('fileUrl');
+        const already = new Set(existing.map(e => e.fileUrl));
+
+        const toInsert = urls
+            .filter(url => !already.has(url))
+            .map(url => ({
+                applicationId,
+                uploadedBy:    application.applicantId,
+                fileName:      (url.split(/[/\\]/).pop() || 'document'),
+                fileUrl:       url,
+                fileType:      typeof classifyFileType === 'function' ? classifyFileType(url) : 'document',
+                fileSizeBytes: 0,
+            }));
+
+        if (toInsert.length) await DocumentVaultItem.insertMany(toInsert);
+    } catch (e) {
+        console.error('[seedVaultFromApplication]', e.message);
+    }
+}
+
 // ── GET /api/ngos ────────────────────────────────────────────────
 // Lists verified, active NGOs. Each NGO must have been approved by
 // admin (isVerified: true) to appear in the client's NGO Hub.
@@ -421,6 +481,12 @@ exports.respondToApplication = async (req, res) => {
             });
             await tracking.save();
 
+            // Auto-populate the Shared Vault with everything the client
+            // already submitted during intake — they shouldn't have to
+            // re-upload the same CNIC/income slips/etc. a second time
+            // just because the case moved into the workspace.
+            await seedVaultFromApplication(application, tracking.applicationId);
+
             // Bump NGO accepted cases count
             await Ngo.findByIdAndUpdate(application.ngoId._id, { $inc: { acceptedCases: 1 } });
 
@@ -670,9 +736,7 @@ exports.submitSubStepDocument = async (req, res) => {
     try {
         const { tracking, isClient } = await loadOwnedTracking(req.params.applicationId, req.user.id);
         if (!tracking) return res.status(404).json({ msg: 'Case not found.' });
-        if (!isClient) return res.status(403).json({ msg: 'Only the client can submit a document for this step.' });
-
-        if (!req.file) return res.status(400).json({ msg: 'No file was uploaded. Expected field name "file".' });
+        if (!isClient) return res.status(403).json({ msg: 'Only the client can submit for this step.' });
 
         const idx = parseInt(req.params.milestoneIndex, 10);
         if (isNaN(idx) || idx < 0 || idx >= tracking.milestones.length)
@@ -681,12 +745,40 @@ exports.submitSubStepDocument = async (req, res) => {
         const subStep = tracking.milestones[idx].subSteps.id(req.params.subStepId);
         if (!subStep) return res.status(404).json({ msg: 'Sub-step not found.' });
 
-        subStep.submittedFileUrl  = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
-        subStep.submittedFileName = req.file.originalname || '';
-        subStep.submittedAt       = new Date();
+        if (subStep.type === 'text') {
+            const { text } = req.body;
+            if (!text || !text.trim())
+                return res.status(400).json({ msg: 'text is required for this step.' });
+            subStep.submittedText = text.trim();
+            subStep.submittedFileUrl  = '';
+            subStep.submittedFileName = '';
+        } else {
+            if (!req.file) return res.status(400).json({ msg: 'No file was uploaded. Expected field name "file".' });
+            subStep.submittedFileUrl  = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
+            subStep.submittedFileName = req.file.originalname || '';
+            subStep.submittedText     = '';
+
+            // Also surface it in the Shared Vault, not just inside this
+            // one milestone card — a document is a document regardless of
+            // which flow it arrived through.
+            try {
+                await DocumentVaultItem.create({
+                    applicationId: tracking.applicationId,
+                    uploadedBy:    req.user.id,
+                    fileName:      req.file.originalname || subStep.label,
+                    fileUrl:       subStep.submittedFileUrl,
+                    fileType:      typeof classifyFileType === 'function' ? classifyFileType(req.file.originalname) : 'document',
+                    fileSizeBytes: req.file.size || 0,
+                });
+            } catch (vaultErr) {
+                console.error('[submitSubStepDocument] Vault copy failed:', vaultErr.message);
+            }
+        }
+
+        subStep.submittedAt = new Date();
         // A resubmission (e.g. NGO asked for a clearer copy) reopens the
         // step for re-review rather than staying marked done from a
-        // previous, different file.
+        // previous, different submission.
         subStep.isDone = false;
         tracking.updatedAt = new Date();
         await tracking.save();
@@ -694,8 +786,8 @@ exports.submitSubStepDocument = async (req, res) => {
         await notify(
             tracking.ngoUserId,
             'case',
-            '📎 Client Submitted a Document',
-            `A document was submitted for "${tracking.milestones[idx].subSteps.id(req.params.subStepId).label}". Please review it.`,
+            '📎 Client Submitted a Step',
+            `A submission was made for "${subStep.label}". Please review it.`,
             tracking.applicationId.toString()
         );
 
@@ -704,6 +796,7 @@ exports.submitSubStepDocument = async (req, res) => {
             emitToRoom(`ngocase:${tracking.applicationId}`, 'milestone:updated', {
                 trackingId: tracking._id, milestones: tracking.milestones
             });
+            emitToRoom(`ngocase:${tracking.applicationId}`, 'vault:file-added', {});
         } catch (e) { console.error('[submitSubStepDocument] Socket emit failed:', e.message); }
 
         res.json({ success: true, tracking });
@@ -717,8 +810,9 @@ exports.submitSubStepDocument = async (req, res) => {
 // NGO adds a custom sub-step to a milestone.
 exports.addSubStep = async (req, res) => {
     try {
-        const { label } = req.body;
+        const { label, type } = req.body;
         if (!label || !label.trim()) return res.status(400).json({ msg: 'label is required.' });
+        const stepType = type === 'text' ? 'text' : 'document';
 
         const { tracking, isNgo } = await loadOwnedTracking(req.params.applicationId, req.user.id);
         if (!tracking) return res.status(404).json({ msg: 'Case not found.' });
@@ -728,7 +822,7 @@ exports.addSubStep = async (req, res) => {
         if (isNaN(idx) || idx < 0 || idx >= tracking.milestones.length)
             return res.status(404).json({ msg: 'Milestone not found.' });
 
-        tracking.milestones[idx].subSteps.push({ label: label.trim() });
+        tracking.milestones[idx].subSteps.push({ label: label.trim(), type: stepType });
         recomputeMilestoneStatus(tracking.milestones[idx]);
         tracking.updatedAt = new Date();
         await tracking.save();
@@ -873,7 +967,18 @@ exports.generateCaseDocument = async (req, res) => {
         ]);
         if (!application) return res.status(404).json({ msg: 'Application not found.' });
 
-        const { resolutionSummary, lawyerAssigned, additionalAgreementNotes } = req.body;
+        const { resolutionSummary, assistanceScope, lawyerAssigned, financialAid, socialAdvocacy, additionalAgreementNotes } = req.body;
+
+        // Anti-fraud requirement: if the NGO is recording that financial aid
+        // was given, the account it moved FROM has to be on the record —
+        // otherwise this document is just an unverifiable claim. Reject the
+        // generate request outright rather than silently accepting a blank
+        // account field.
+        if (financialAid && financialAid.amount != null) {
+            if (!financialAid.ngoAccountNumber || !financialAid.ngoAccountNumber.trim()) {
+                return res.status(400).json({ msg: 'The NGO\'s disbursing account number is required whenever a financial amount is recorded.' });
+            }
+        }
 
         const doc = await CaseDocument.create({
             applicationId: tracking.applicationId,
@@ -882,13 +987,17 @@ exports.generateCaseDocument = async (req, res) => {
 
             ngoName:               ngo?.name || '',
             ngoRegistrationNumber: ngo?.registrationNumber || '',
+            ngoRegisteredUnderAct: ngo?.registeredUnderAct || '',
+            ngoNtn:                ngo?.ntn || '',
             ngoAddress:            ngo?.headOfficeAddress || ngo?.address || '',
             ngoLogoUrl:            ngo?.logoUrl || '',
 
-            clientName:  application.applicantName || client?.name || '',
-            clientCnic:  application.applicantCnic || '',
-            clientPhone: application.applicantPhone || '',
-            clientEmail: application.applicantEmail || '',
+            clientName:    application.applicantName || client?.name || '',
+            clientCnic:    application.applicantCnic || '',
+            clientPhone:   application.applicantPhone || '',
+            clientEmail:   application.applicantEmail || '',
+            clientAddress: application.applicantAddress || '',
+            cnicVerified:  !!(application.cnicFrontUrl && application.cnicBackUrl),
 
             caseTitle:   application.caseTitle || application.caseFocusCategory || '',
             caseSummary: application.caseSummary || '',
@@ -897,13 +1006,39 @@ exports.generateCaseDocument = async (req, res) => {
 
             dateApplied: application.createdAt,
 
+            documentsChecklist: buildDocumentsChecklist(application),
+
+            approvedAssistanceCategory: SERVICE_TYPE_LABELS[application.serviceType] || application.caseFocusCategory || '',
+            assistanceScope: assistanceScope || '',
+
             resolutionSummary: resolutionSummary || '',
+
+            financialAid: financialAid ? {
+                amount:           financialAid.amount != null ? Number(financialAid.amount) : null,
+                amountInWords:    financialAid.amountInWords || '',
+                disbursementMode: financialAid.disbursementMode || '',
+                transactionRef:   financialAid.transactionRef || '',
+                purpose:          financialAid.purpose || '',
+                ngoAccountTitle:  financialAid.ngoAccountTitle || '',
+                ngoAccountNumber: financialAid.ngoAccountNumber || '',
+                ngoBankName:      financialAid.ngoBankName || '',
+            } : undefined,
+
             lawyerAssigned: lawyerAssigned ? {
                 name:               lawyerAssigned.name || '',
                 barNumber:          lawyerAssigned.barNumber || '',
+                courtName:          lawyerAssigned.courtName || '',
+                caseNumberInCourt:  lawyerAssigned.caseNumberInCourt || '',
                 ngoPaysLawyer:      !!lawyerAssigned.ngoPaysLawyer,
+                feeAmount:          lawyerAssigned.feeAmount != null ? Number(lawyerAssigned.feeAmount) : null,
                 feeArrangementNote: lawyerAssigned.feeArrangementNote || '',
             } : undefined,
+
+            socialAdvocacy: socialAdvocacy ? {
+                advocacyScope: socialAdvocacy.advocacyScope || '',
+                mediaConsent:  !!socialAdvocacy.mediaConsent,
+            } : undefined,
+
             additionalAgreementNotes: additionalAgreementNotes || '',
         });
 
@@ -926,7 +1061,17 @@ exports.updateCaseDocument = async (req, res) => {
         if (!doc) return res.status(404).json({ msg: 'No document exists for this case yet.' });
         if (doc.status !== 'draft') return res.status(400).json({ msg: 'This document has already been pushed and can no longer be edited.' });
 
-        const editable = ['resolutionSummary', 'additionalAgreementNotes', 'lawyerAssigned'];
+        if (req.body.financialAid && req.body.financialAid.amount != null) {
+            const acct = req.body.financialAid.ngoAccountNumber ?? doc.financialAid?.ngoAccountNumber;
+            if (!acct || !acct.trim()) {
+                return res.status(400).json({ msg: 'The NGO\'s disbursing account number is required whenever a financial amount is recorded.' });
+            }
+        }
+
+        const editable = [
+            'resolutionSummary', 'assistanceScope', 'additionalAgreementNotes',
+            'lawyerAssigned', 'financialAid', 'socialAdvocacy'
+        ];
         editable.forEach(field => {
             if (req.body[field] !== undefined) doc[field] = req.body[field];
         });
@@ -962,7 +1107,8 @@ exports.getCaseDocument = async (req, res) => {
 };
 
 // ── POST /api/ngos/case-tracking/:applicationId/document/push ────
-// NGO signs and pushes the draft to the client.
+// NGO signs (with a real signature image, not just a typed name) and
+// pushes the draft to the client. Multipart — field name 'signature'.
 exports.pushCaseDocument = async (req, res) => {
     try {
         const { tracking, isNgo } = await loadOwnedTracking(req.params.applicationId, req.user.id);
@@ -972,17 +1118,20 @@ exports.pushCaseDocument = async (req, res) => {
         const { pushNote, ngoSignerName, ngoSignerTitle } = req.body;
         if (!ngoSignerName || !ngoSignerName.trim())
             return res.status(400).json({ msg: 'ngoSignerName is required to sign and push this document.' });
+        if (!req.file)
+            return res.status(400).json({ msg: 'A signature image is required. Expected field name "signature".' });
 
         const doc = await CaseDocument.findOne({ applicationId: tracking.applicationId });
         if (!doc) return res.status(404).json({ msg: 'No document exists for this case yet.' });
         if (doc.status !== 'draft') return res.status(400).json({ msg: 'This document has already been pushed.' });
 
-        doc.status         = 'pushed';
-        doc.pushNote        = pushNote || '';
-        doc.ngoSignerName   = ngoSignerName.trim();
-        doc.ngoSignerTitle  = ngoSignerTitle || '';
-        doc.ngoSignedAt     = new Date();
-        doc.updatedAt       = new Date();
+        doc.status          = 'pushed';
+        doc.pushNote         = pushNote || '';
+        doc.ngoSignerName    = ngoSignerName.trim();
+        doc.ngoSignerTitle   = ngoSignerTitle || '';
+        doc.ngoSignedAt      = new Date();
+        doc.ngoSignatureUrl  = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
+        doc.updatedAt        = new Date();
         await doc.save();
 
         await notify(
@@ -1006,7 +1155,8 @@ exports.pushCaseDocument = async (req, res) => {
 };
 
 // ── POST /api/ngos/case-tracking/:applicationId/document/sign ────
-// Client signs the pushed document.
+// Client signs the pushed document with a real signature image.
+// Multipart — field name 'signature'.
 exports.signCaseDocument = async (req, res) => {
     try {
         const { tracking, isClient } = await loadOwnedTracking(req.params.applicationId, req.user.id);
@@ -1016,16 +1166,19 @@ exports.signCaseDocument = async (req, res) => {
         const { clientSignerName } = req.body;
         if (!clientSignerName || !clientSignerName.trim())
             return res.status(400).json({ msg: 'clientSignerName is required to sign this document.' });
+        if (!req.file)
+            return res.status(400).json({ msg: 'A signature image is required. Expected field name "signature".' });
 
         const doc = await CaseDocument.findOne({ applicationId: tracking.applicationId });
         if (!doc) return res.status(404).json({ msg: 'No document exists for this case yet.' });
         if (doc.status !== 'pushed')
             return res.status(400).json({ msg: doc.status === 'draft' ? 'This document has not been shared with you yet.' : 'This document has already been signed.' });
 
-        doc.status           = 'signed_by_client';
-        doc.clientSignerName = clientSignerName.trim();
-        doc.clientSignedAt   = new Date();
-        doc.updatedAt        = new Date();
+        doc.status            = 'signed_by_client';
+        doc.clientSignerName   = clientSignerName.trim();
+        doc.clientSignedAt     = new Date();
+        doc.clientSignatureUrl = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
+        doc.updatedAt          = new Date();
         await doc.save();
 
         await notify(
@@ -1052,6 +1205,8 @@ exports.signCaseDocument = async (req, res) => {
 // Either party can finalize once the client has signed — this is a
 // deliberate separate confirming step, not automatic on signing, so
 // either side gets a moment to review the fully-signed document first.
+// Notifies BOTH parties, not just "the other one" — both should get a
+// clean confirmation that the agreement is now permanent.
 exports.finalizeCaseDocument = async (req, res) => {
     try {
         const { tracking, isClient, isNgo } = await loadOwnedTracking(req.params.applicationId, req.user.id);
@@ -1068,14 +1223,14 @@ exports.finalizeCaseDocument = async (req, res) => {
         doc.updatedAt   = new Date();
         await doc.save();
 
-        const otherPartyId = isNgo ? tracking.clientId : tracking.ngoUserId;
-        await notify(
-            otherPartyId,
-            'case',
-            '✅ Case Document Finalized',
-            `The case document for "${doc.caseTitle}" has been finalized and is available to download.`,
-            tracking.applicationId.toString()
-        );
+        await Promise.all([
+            notify(tracking.clientId, 'case', '✅ Case Document Finalized',
+                `The case document for "${doc.caseTitle}" has been finalized and is available to download.`,
+                tracking.applicationId.toString()),
+            notify(tracking.ngoUserId, 'case', '✅ Case Document Finalized',
+                `The case document for "${doc.caseTitle}" has been finalized and is available to download.`,
+                tracking.applicationId.toString()),
+        ]);
 
         try {
             const { emitToRoom } = require('../services/socketService');
@@ -1085,6 +1240,85 @@ exports.finalizeCaseDocument = async (req, res) => {
         res.json({ success: true, document: doc });
     } catch (err) {
         console.error('[finalizeCaseDocument]', err.message);
+        res.status(500).json({ msg: 'Server error' });
+    }
+};
+
+// ── POST /api/ngos/case-tracking/:applicationId/document/mark-downloaded ──
+// Called once by each party the first time they actually tap Download —
+// this is what populates the permanent "My Documents" library (see
+// getMyCaseDocuments below), which otherwise would show every in-progress
+// document from every case rather than only the ones a party chose to
+// keep a copy of.
+exports.markDocumentDownloaded = async (req, res) => {
+    try {
+        const { tracking, isClient, isNgo } = await loadOwnedTracking(req.params.applicationId, req.user.id);
+        if (!tracking) return res.status(404).json({ msg: 'Case not found.' });
+        if (!isClient && !isNgo) return res.status(403).json({ msg: 'Not authorized.' });
+
+        const doc = await CaseDocument.findOne({ applicationId: tracking.applicationId });
+        if (!doc) return res.status(404).json({ msg: 'No document exists for this case yet.' });
+        if (doc.status !== 'finalized')
+            return res.status(400).json({ msg: 'This document can only be downloaded once it has been finalized.' });
+
+        if (isClient) doc.downloadedByClient = true;
+        if (isNgo)    doc.downloadedByNgo    = true;
+        await doc.save();
+
+        res.json({ success: true, document: doc });
+    } catch (err) {
+        console.error('[markDocumentDownloaded]', err.message);
+        res.status(500).json({ msg: 'Server error' });
+    }
+};
+
+// ── GET /api/ngos/my-case-documents ───────────────────────────────
+// The permanent "My Documents" library — every finalized case document
+// the requester has actually downloaded at least once, across ALL their
+// cases. Deliberately separate from the per-case Shared Vault: the vault
+// holds working files for one case, this is the small, permanent set of
+// fully-executed agreements a party has chosen to keep.
+exports.getMyCaseDocuments = async (req, res) => {
+    try {
+        const asClient = await CaseDocument.find({
+            status: 'finalized',
+            downloadedByClient: true,
+        }).sort({ finalizedAt: -1 });
+        const asNgo = await CaseDocument.find({
+            status: 'finalized',
+            downloadedByNgo: true,
+        }).sort({ finalizedAt: -1 });
+
+        // A CaseDocument doesn't store the client's own userId directly
+        // (only clientCnic/clientName snapshot fields), so match via the
+        // parent NgoCaseTracking's clientId instead.
+        const trackingIds = [...asClient, ...asNgo].map(d => d.applicationId);
+        const trackings = await NgoCaseTracking.find({ applicationId: { $in: trackingIds } });
+        const trackingByAppId = {};
+        trackings.forEach(t => { trackingByAppId[t.applicationId.toString()] = t; });
+
+        const mine = [...asClient, ...asNgo].filter(d => {
+            const t = trackingByAppId[d.applicationId.toString()];
+            if (!t) return false;
+            const isClient = t.clientId?.toString() === req.user.id.toString();
+            const isNgo    = t.ngoUserId?.toString() === req.user.id.toString();
+            return isClient || isNgo;
+        });
+
+        // De-dupe (a document could theoretically match both lists if the
+        // same user were somehow both parties, which shouldn't happen but
+        // costs nothing to guard against).
+        const seen = new Set();
+        const result = mine.filter(d => {
+            const id = d._id.toString();
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+        });
+
+        res.json({ success: true, documents: result });
+    } catch (err) {
+        console.error('[getMyCaseDocuments]', err.message);
         res.status(500).json({ msg: 'Server error' });
     }
 };
