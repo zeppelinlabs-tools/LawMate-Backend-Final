@@ -91,6 +91,11 @@ const uploadVaultFile = uploadMedia.single('file');
 // ever saved.
 const uploadProfilePicSingle = uploadMedia.single('profilePic');
 
+// NGO logo uploader for PUT /ngos/my — same gap as the user profile pic:
+// the NGO's own "Edit Profile" sheet had no logo picker or upload
+// handling at all, only text fields.
+const uploadNgoLogoSingle = uploadMedia.single('logo');
+
 // Feed post uploader — up to 6 images/videos per post under field name
 // 'files', reusing the same image+video+pdf filter and 50MB-per-file cap
 // as the vault/attachment uploaders above.
@@ -162,6 +167,7 @@ module.exports = {
     uploadSingleAttachment,
     uploadVaultFile,
     uploadProfilePicSingle,
+    uploadNgoLogoSingle,
     uploadFeedMedia,
     getFileUrl,
     getSingleFileUrl,
