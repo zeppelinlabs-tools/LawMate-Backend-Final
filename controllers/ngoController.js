@@ -127,6 +127,19 @@ exports.updateMyNgo = async (req, res) => {
         if (helpline)          ngo.helpline          = helpline;
         if (alternatePhone)    ngo.alternatePhone    = alternatePhone;
         if (email)             ngo.email             = email;
+
+        // The Edit Profile sheet had no logo picker at all before — this
+        // mirrors the same fix applied to PUT /auth/update-profile: the
+        // uploaded file arrives as req.file (uploadNgoLogoSingle, field
+        // name 'logo'), not as a URL string in the body.
+        if (req.file) {
+            try {
+                const { getSingleFileUrl } = require('../middleware/uploadMiddleware');
+                ngo.logoUrl = getSingleFileUrl(req);
+            } catch (e) {
+                console.error('[updateMyNgo] Could not resolve uploaded logo URL:', e.message);
+            }
+        }
         if (website)           ngo.website           = website;
         if (Array.isArray(focusAreas))     ngo.focusAreas     = focusAreas;
         if (Array.isArray(categories))     ngo.categories     = categories;
@@ -645,6 +658,60 @@ async function loadOwnedTracking(applicationId, userId) {
     const isNgo    = tracking.ngoUserId?.toString() === userId.toString();
     return { tracking, isClient, isNgo };
 }
+
+// ── POST /api/ngos/case-tracking/:applicationId/milestone/:milestoneIndex/substep/:subStepId/submit ──
+// CLIENT ONLY. Client uploads the actual document (or other proof) that
+// fulfills this sub-step's requirement — e.g. the income slip file for a
+// "Provide income slip" sub-step. This does NOT mark the sub-step done —
+// the NGO still has to open it, review the file, and mark it done
+// themselves (updateSubStep/toggleSubStep below). Reuses the single-file
+// vault uploader (field name 'file'), same as the Shared Vault.
+exports.submitSubStepDocument = async (req, res) => {
+    try {
+        const { tracking, isClient } = await loadOwnedTracking(req.params.applicationId, req.user.id);
+        if (!tracking) return res.status(404).json({ msg: 'Case not found.' });
+        if (!isClient) return res.status(403).json({ msg: 'Only the client can submit a document for this step.' });
+
+        if (!req.file) return res.status(400).json({ msg: 'No file was uploaded. Expected field name "file".' });
+
+        const idx = parseInt(req.params.milestoneIndex, 10);
+        if (isNaN(idx) || idx < 0 || idx >= tracking.milestones.length)
+            return res.status(404).json({ msg: 'Milestone not found.' });
+
+        const subStep = tracking.milestones[idx].subSteps.id(req.params.subStepId);
+        if (!subStep) return res.status(404).json({ msg: 'Sub-step not found.' });
+
+        subStep.submittedFileUrl  = typeof getSingleFileUrl === 'function' ? getSingleFileUrl(req) : '';
+        subStep.submittedFileName = req.file.originalname || '';
+        subStep.submittedAt       = new Date();
+        // A resubmission (e.g. NGO asked for a clearer copy) reopens the
+        // step for re-review rather than staying marked done from a
+        // previous, different file.
+        subStep.isDone = false;
+        tracking.updatedAt = new Date();
+        await tracking.save();
+
+        await notify(
+            tracking.ngoUserId,
+            'case',
+            '📎 Client Submitted a Document',
+            `A document was submitted for "${tracking.milestones[idx].subSteps.id(req.params.subStepId).label}". Please review it.`,
+            tracking.applicationId.toString()
+        );
+
+        try {
+            const { emitToRoom } = require('../services/socketService');
+            emitToRoom(`ngocase:${tracking.applicationId}`, 'milestone:updated', {
+                trackingId: tracking._id, milestones: tracking.milestones
+            });
+        } catch (e) { console.error('[submitSubStepDocument] Socket emit failed:', e.message); }
+
+        res.json({ success: true, tracking });
+    } catch (err) {
+        console.error('[submitSubStepDocument]', err.message);
+        res.status(500).json({ msg: 'Server error' });
+    }
+};
 
 // ── POST /api/ngos/case-tracking/:applicationId/milestone/:milestoneIndex/substep ──
 // NGO adds a custom sub-step to a milestone.
