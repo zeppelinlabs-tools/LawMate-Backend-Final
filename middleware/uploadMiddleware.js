@@ -96,6 +96,11 @@ const uploadProfilePicSingle = uploadMedia.single('profilePic');
 // handling at all, only text fields.
 const uploadNgoLogoSingle = uploadMedia.single('logo');
 
+// Signature image uploader for the case document push/sign endpoints —
+// a real signature image, not just a typed name, is what makes push/sign
+// an actual signing action rather than a bare form submit.
+const uploadSignatureSingle = uploadMedia.single('signature');
+
 // Feed post uploader — up to 6 images/videos per post under field name
 // 'files', reusing the same image+video+pdf filter and 50MB-per-file cap
 // as the vault/attachment uploaders above.
@@ -168,6 +173,7 @@ module.exports = {
     uploadVaultFile,
     uploadProfilePicSingle,
     uploadNgoLogoSingle,
+    uploadSignatureSingle,
     uploadFeedMedia,
     getFileUrl,
     getSingleFileUrl,
