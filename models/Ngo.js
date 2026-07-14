@@ -91,7 +91,23 @@ const NgoCaseTrackingSchema = new mongoose.Schema({
         // client-facing timeline can show exactly when the update happened
         // (distinct from `date`, which can be a manually-set target/event
         // date rather than the moment of the status change itself).
-        updatedByNgoAt: { type: Date, default: null }
+        updatedByNgoAt: { type: Date, default: null },
+        // Sub-steps break a milestone into the actual concrete things the
+        // NGO has to check off (e.g. under "Document Collection": one
+        // sub-step per required document — "Income slip received",
+        // "Court fee invoice verified", etc). Auto-seeded from the
+        // application's submitted documents at case-acceptance time (see
+        // buildDefaultMilestones in ngoController.js), and the NGO can add
+        // more of their own from the workspace. When a milestone has any
+        // sub-steps, its own `status` is derived automatically (done only
+        // once every sub-step is done) rather than being toggled directly
+        // — see updateSubStep below.
+        subSteps: [{
+            label:          { type: String, required: true },
+            isDone:         { type: Boolean, default: false },
+            updatedByNgoAt: { type: Date, default: null },
+            createdAt:      { type: Date, default: Date.now }
+        }]
     }],
     // NOTE: file storage for a case now lives in the shared DocumentVaultItem
     // collection (models/DocumentVaultItem.js), scoped by applicationId —
@@ -162,4 +178,93 @@ const Ngo             = mongoose.model('Ngo',             NgoSchema);
 const NgoApplication  = mongoose.model('NgoApplication',  NgoApplicationSchema);
 const NgoCaseTracking = mongoose.model('NgoCaseTracking', NgoCaseTrackingSchema);
 
-module.exports = { Ngo, NgoApplication, NgoCaseTracking };
+// ── NGO Case Document ────────────────────────────────────────────────────────
+// The formal completion document for a case — generated only once every
+// milestone is done, then pushed to the client to review and sign, and
+// finally finalized so both sides have a permanent, downloadable record.
+// Deliberately a flat snapshot of names/details rather than live refs to
+// User/Ngo/NgoApplication: once this exists it's meant to read the same
+// way forever, even if the underlying profile records change later — the
+// whole point is that it stands as evidence of what was true and agreed
+// at the time.
+const CaseDocumentSchema = new mongoose.Schema({
+    applicationId: { type: mongoose.Schema.Types.ObjectId, ref: 'NgoApplication', required: true, unique: true },
+    ngoId:         { type: mongoose.Schema.Types.ObjectId, ref: 'Ngo', required: true },
+
+    status: {
+        type: String,
+        enum: ['draft', 'pushed', 'signed_by_client', 'finalized'],
+        default: 'draft'
+    },
+
+    // ── NGO letterhead snapshot ──────────────────────────────
+    ngoName:               { type: String, default: '' },
+    ngoRegistrationNumber: { type: String, default: '' },
+    ngoAddress:            { type: String, default: '' },
+    ngoLogoUrl:            { type: String, default: '' },
+
+    // ── Client snapshot ───────────────────────────────────────
+    clientName:  { type: String, default: '' },
+    clientCnic:  { type: String, default: '' },
+    clientPhone: { type: String, default: '' },
+    clientEmail: { type: String, default: '' },
+
+    // ── Case details ──────────────────────────────────────────
+    caseTitle:    { type: String, default: '' },
+    caseSummary:  { type: String, default: '' },
+    serviceType:  { type: String, default: '' },
+    referenceId:  { type: String, default: '' },
+
+    // Exactly the date the client's application was submitted — NOT the
+    // date this document was generated. Read from NgoApplication.createdAt
+    // at generation time and never touched again.
+    dateApplied:   { type: Date, required: true },
+    dateGenerated: { type: Date, default: Date.now },
+
+    // What was actually done for the client, as free text the NGO fills
+    // in at generation time (e.g. "Represented client in labor tribunal
+    // proceedings and recovered PKR 120,000 in unpaid wages").
+    resolutionSummary: { type: String, default: '' },
+
+    // Optional — only relevant if a lawyer was engaged as part of this
+    // case. Left entirely blank/omitted from the rendered document when
+    // not applicable.
+    lawyerAssigned: {
+        name:               { type: String, default: '' },
+        barNumber:          { type: String, default: '' },
+        ngoPaysLawyer:      { type: Boolean, default: false },
+        feeArrangementNote: { type: String, default: '' }
+    },
+
+    // Optional extra agreement/terms text — entirely skippable by the NGO.
+    additionalAgreementNotes: { type: String, default: '' },
+
+    // Message the NGO sends along when pushing the draft to the client
+    // (e.g. "Please review and sign below").
+    pushNote: { type: String, default: '' },
+
+    // ── Signatures ────────────────────────────────────────────
+    // Lightweight typed-name e-signature with a timestamp, rather than a
+    // drawn signature pad — functionally equivalent as an attestation
+    // ("I, <name>, agree to and sign this document") and far more
+    // reliable across devices than canvas capture. signatureImageUrl is
+    // included as an optional upgrade path (e.g. an uploaded scanned
+    // signature) without being required.
+    ngoSignerName:    { type: String, default: '' },
+    ngoSignerTitle:   { type: String, default: '' }, // e.g. "Head of NGO"
+    ngoSignedAt:      { type: Date, default: null },
+    ngoSignatureUrl:  { type: String, default: '' },
+
+    clientSignerName:   { type: String, default: '' },
+    clientSignedAt:     { type: Date, default: null },
+    clientSignatureUrl: { type: String, default: '' },
+
+    finalizedAt: { type: Date, default: null },
+
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+const CaseDocument = mongoose.model('CaseDocument', CaseDocumentSchema);
+
+module.exports = { Ngo, NgoApplication, NgoCaseTracking, CaseDocument };
