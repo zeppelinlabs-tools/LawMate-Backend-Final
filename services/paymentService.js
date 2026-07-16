@@ -64,7 +64,13 @@ async function createCheckoutSession({ referenceType, referenceId, amount }) {
         }
     );
 
-    const tracker = trackerResponse.data?.data?.tracker;
+    // Safepay's response nests the actual session object under `data`, and
+    // the session identifier field is called `token` (confusingly similar
+    // to, but not the same as, the word "tracker" used elsewhere in their
+    // docs/URLs) — reading `.tracker` here was silently treating every
+    // successful response as a failure, even though Safepay had already
+    // created a valid session.
+    const tracker = trackerResponse.data?.data?.token;
     if (!tracker) {
         console.error('[paymentService] Safepay tracker creation failed:', trackerResponse.data);
         const err = new Error('Failed to create Safepay payment session');
