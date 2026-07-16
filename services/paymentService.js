@@ -24,7 +24,7 @@ function safepayBaseUrl() {
 }
 
 function isConfigured() {
-    return !!process.env.SAFEPAY_SECRET_KEY;
+    return !!process.env.SAFEPAY_SECRET_KEY && !!process.env.SAFEPAY_PUBLIC_KEY;
 }
 
 /**
@@ -49,6 +49,8 @@ async function createCheckoutSession({ referenceType, referenceId, amount }) {
     const trackerResponse = await axios.post(
         `${base}/order/v1/init`,
         {
+            client:      process.env.SAFEPAY_PUBLIC_KEY,
+            environment: process.env.SAFEPAY_ENV === 'production' ? 'production' : 'sandbox',
             currency: 'PKR',
             amount:   Math.round(amount * 100), // Safepay uses paisa (smallest unit)
             order_id: orderId,
