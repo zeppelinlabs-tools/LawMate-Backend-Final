@@ -563,55 +563,30 @@ exports.initializePayment = async (req, res) => {
         }
 
         // ── PATH B: PAID — create Safepay payment session ─────
-        if (!process.env.SAFEPAY_SECRET_KEY) {
+        const paymentService = require('../services/paymentService');
+        if (!paymentService.isConfigured()) {
             return res.status(500).json({
                 msg: 'Safepay is not configured. Add SAFEPAY_SECRET_KEY to your .env file.'
             });
         }
 
-        const axios      = require('axios');
-        const clientUser = await User.findById(clientId).select('email name phone');
-
-        // Step 1: Create a Safepay tracker (payment session)
-        // Safepay sandbox: https://sandbox.api.getsafepay.com
-        // Safepay production: https://api.getsafepay.com
-        const safepayBase = process.env.SAFEPAY_ENV === 'production'
-            ? 'https://api.getsafepay.com'
-            : 'https://sandbox.api.getsafepay.com';
-
-        // Create payment tracker
-        const trackerResponse = await axios.post(
-            `${safepayBase}/order/v1/init`,
-            {
-                currency:   'PKR',
-                amount:     Math.round(totalAmount * 100), // Safepay uses paisa (smallest unit)
-                order_id:   engagement._id.toString(),
-                source:     'mobile',
-            },
-            {
-                headers: {
-                    'Content-Type':  'application/json',
-                    'X-SFPY-MERCHANT-SECRET': process.env.SAFEPAY_SECRET_KEY
-                }
-            }
-        );
-
-        const tracker = trackerResponse.data?.data?.tracker;
-
-        if (!tracker) {
-            console.error('[initializePayment] Safepay tracker creation failed:', trackerResponse.data);
-            return res.status(502).json({ msg: 'Failed to create Safepay payment session' });
+        let session;
+        try {
+            session = await paymentService.createCheckoutSession({
+                referenceType: 'engagement',
+                referenceId:   engagement._id.toString(),
+                amount:        totalAmount,
+            });
+        } catch (payErr) {
+            console.error('[initializePayment] Safepay error:', payErr.message);
+            return res.status(502).json({ msg: payErr.message });
         }
-
-        // Step 2: Build the hosted checkout URL for the Flutter WebView
-        const safepayPublicKey = process.env.SAFEPAY_PUBLIC_KEY || '';
-        const checkoutUrl = `${safepayBase}/embedded?beacon=${tracker}&order_id=${engagement._id}&env=${process.env.SAFEPAY_ENV || 'sandbox'}`;
 
         return res.status(200).json({
             success:      true,
             isFree:       false,
-            tracker,
-            checkoutUrl,
+            tracker:      session.tracker,
+            checkoutUrl:  session.checkoutUrl,
             amount:       totalAmount,
             currency:     'PKR',
             msg:          'Safepay session created. Open checkoutUrl in your Flutter WebView to complete payment.'
@@ -648,6 +623,7 @@ exports.initializePayment = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.safepayWebhook = async (req, res) => {
     try {
+        const paymentService = require('../services/paymentService');
         const webhookSecret = process.env.SAFEPAY_WEBHOOK_SECRET;
 
         if (!webhookSecret) {
@@ -657,7 +633,6 @@ exports.safepayWebhook = async (req, res) => {
 
         // ── Step 1: Verify Safepay webhook signature ──────────
         // Safepay sends signature in 'x-sfpy-signature' header
-        // Signature = HMAC-SHA256(raw body, SAFEPAY_WEBHOOK_SECRET)
         const receivedSig  = req.headers['x-sfpy-signature'];
         const rawBody      = req.body; // raw Buffer from express.raw()
 
@@ -666,12 +641,7 @@ exports.safepayWebhook = async (req, res) => {
             return res.status(400).json({ msg: 'Missing webhook signature' });
         }
 
-        const expectedSig = crypto
-            .createHmac('sha256', webhookSecret)
-            .update(rawBody)
-            .digest('hex');
-
-        if (receivedSig !== expectedSig) {
+        if (!paymentService.verifyWebhookSignature(rawBody, receivedSig)) {
             console.error('[Webhook] Signature mismatch — possible fraudulent request');
             return res.status(400).json({ msg: 'Webhook signature verification failed' });
         }
@@ -685,82 +655,120 @@ exports.safepayWebhook = async (req, res) => {
         }
 
         // Only process successful payment events
-        // Safepay event types: payment:created, payment:success, payment:failed
         const eventType = payload?.type || payload?.event;
         if (eventType !== 'payment:success' && eventType !== 'payment.success') {
             return res.status(200).json({ received: true, processed: false, event: eventType });
         }
 
-        // Extract engagementId from order_id
-        const engagementId = payload?.data?.order_id
+        const rawOrderId = payload?.data?.order_id
             || payload?.payload?.order_id
             || payload?.order_id;
 
-        if (!engagementId) {
-            console.error('[Webhook] No order_id (engagementId) in Safepay payload');
+        if (!rawOrderId) {
+            console.error('[Webhook] No order_id in Safepay payload');
             return res.status(400).json({ msg: 'order_id missing from webhook payload' });
         }
 
-        // ── Step 3: Load engagement ───────────────────────────
-        const engagement = await CaseEngagement.findById(engagementId);
-        if (!engagement) {
-            console.error('[Webhook] Engagement not found:', engagementId);
-            return res.status(404).json({ msg: 'Engagement not found' });
+        const parsed = paymentService.parseOrderId(rawOrderId);
+        if (!parsed) {
+            console.error('[Webhook] Unrecognized order_id format:', rawOrderId);
+            return res.status(400).json({ msg: 'Unrecognized order_id format' });
         }
 
-        // Prevent double-processing
-        if (engagement.status === 'ESCROW_LOCKED' || engagement.status === 'COMPLETED') {
-            return res.status(200).json({ received: true, msg: 'Already processed' });
+        if (parsed.referenceType === 'bill') {
+            return await handleBillPaymentSuccess(parsed.referenceId, res);
         }
-
-        // ── Step 4: Load professional + apply commission split ─
-        const profId = getProfessionalId(engagement);
-        if (!profId) {
-            return res.status(400).json({ msg: 'No professional found on this engagement' });
-        }
-
-        const professional     = await User.findById(profId).select('role');
-        const totalAmount      = engagement.financials.totalAmount;
-        let platformCommission = 0;
-        let professionalShare  = 0;
-
-        if (professional.role === 'lawyer') {
-            // Lawyer: 15% platform, 85% lawyer
-            platformCommission = parseFloat((totalAmount * 0.15).toFixed(2));
-            professionalShare  = parseFloat((totalAmount * 0.85).toFixed(2));
-        } else if (professional.role === 'social_worker') {
-            // Social Worker: 5% platform, 95% social worker
-            platformCommission = parseFloat((totalAmount * 0.05).toFixed(2));
-            professionalShare  = parseFloat((totalAmount * 0.95).toFixed(2));
-        }
-
-        // ── Step 5: Generate videoRoomId + update engagement ──
-        const videoRoomId = crypto.randomBytes(16).toString('hex');
-
-        engagement.status                        = 'ESCROW_LOCKED';
-        engagement.financials.platformCommission = platformCommission;
-        engagement.financials.professionalShare  = professionalShare;
-        engagement.financials.paymentStatus      = 'HELD_IN_ESCROW';
-        engagement.schedule.videoRoomId          = videoRoomId;
-
-        await engagement.save();
-
-        // ── Step 6: Notify both parties ───────────────────────
-        await saveNotification(
-            engagement.clientId,
-            `Payment received! Your session is confirmed. Video Room ID: ${videoRoomId}`
-        );
-        await saveNotification(
-            profId,
-            `Payment received from client. Session locked. Video Room ID: ${videoRoomId}. Your share: PKR ${professionalShare}`
-        );
-
-        console.log(`[Webhook] Safepay payment processed for engagement ${engagementId}. Room: ${videoRoomId}`);
-
-        return res.status(200).json({ received: true, processed: true });
+        return await handleEngagementPaymentSuccess(parsed.referenceId, res);
 
     } catch (err) {
         console.error('[Webhook] Processing error:', err.message);
         return res.status(500).json({ msg: 'Server error processing webhook', error: err.message });
     }
 };
+
+async function handleEngagementPaymentSuccess(engagementId, res) {
+    const paymentService = require('../services/paymentService');
+
+    const engagement = await CaseEngagement.findById(engagementId);
+    if (!engagement) {
+        console.error('[Webhook] Engagement not found:', engagementId);
+        return res.status(404).json({ msg: 'Engagement not found' });
+    }
+
+    // Prevent double-processing
+    if (engagement.status === 'ESCROW_LOCKED' || engagement.status === 'COMPLETED') {
+        return res.status(200).json({ received: true, msg: 'Already processed' });
+    }
+
+    const profId = getProfessionalId(engagement);
+    if (!profId) {
+        return res.status(400).json({ msg: 'No professional found on this engagement' });
+    }
+
+    const professional = await User.findById(profId).select('role');
+    const totalAmount   = engagement.financials.totalAmount;
+    const { platformCommission, professionalShare } = paymentService.calculateSplit(totalAmount, professional.role);
+
+    const videoRoomId = crypto.randomBytes(16).toString('hex');
+
+    engagement.status                        = 'ESCROW_LOCKED';
+    engagement.financials.platformCommission = platformCommission;
+    engagement.financials.professionalShare  = professionalShare;
+    engagement.financials.paymentStatus      = 'HELD_IN_ESCROW';
+    engagement.schedule.videoRoomId          = videoRoomId;
+
+    await engagement.save();
+
+    await saveNotification(
+        engagement.clientId,
+        `Payment received! Your session is confirmed. Video Room ID: ${videoRoomId}`
+    );
+    await saveNotification(
+        profId,
+        `Payment received from client. Session locked. Video Room ID: ${videoRoomId}. Your share: PKR ${professionalShare}`
+    );
+
+    console.log(`[Webhook] Safepay payment processed for engagement ${engagementId}. Room: ${videoRoomId}`);
+    return res.status(200).json({ received: true, processed: true });
+}
+
+async function handleBillPaymentSuccess(billId, res) {
+    const paymentService = require('../services/paymentService');
+    const Bill    = require('../models/Bill');
+    const Meeting = require('../models/Meeting');
+
+    const bill = await Bill.findById(billId);
+    if (!bill) {
+        console.error('[Webhook] Bill not found:', billId);
+        return res.status(404).json({ msg: 'Bill not found' });
+    }
+
+    // Prevent double-processing (also guards against creating the linked
+    // meeting twice if Safepay ever retries the same webhook event).
+    if (bill.status === 'paid') {
+        return res.status(200).json({ received: true, msg: 'Already processed' });
+    }
+
+    const lawyer = await User.findById(bill.lawyerId).select('role');
+    const { platformCommission, professionalShare } = paymentService.calculateSplit(bill.amount, lawyer?.role);
+
+    bill.status              = 'paid';
+    bill.paidAt               = new Date();
+    bill.platformCommission   = platformCommission;
+    bill.professionalShare    = professionalShare;
+    await bill.save();
+
+    if (bill.meetingDate) {
+        await Meeting.create({
+            engagementId: bill.engagementId, lawyerId: bill.lawyerId, clientId: bill.clientId,
+            billId: bill._id, title: bill.title, date: bill.meetingDate,
+            time: bill.meetingTime, type: bill.meetingType, address: bill.meetingAddress, notes: bill.notes,
+        });
+    }
+
+    await saveNotification(bill.lawyerId, `Payment received! "${bill.title}" — PKR ${bill.amount} has been paid. Your share: PKR ${professionalShare}`);
+    await saveNotification(bill.clientId, `Payment confirmed for "${bill.title}". Your appointment is booked.`);
+
+    console.log(`[Webhook] Safepay payment processed for bill ${billId}.`);
+    return res.status(200).json({ received: true, processed: true });
+}
