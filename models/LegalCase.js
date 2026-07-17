@@ -42,9 +42,8 @@ const LegalCaseSchema = new mongoose.Schema({
     updatedAt:   { type: Date, default: Date.now }
 });
 
-LegalCaseSchema.pre('save', function (next) {
+LegalCaseSchema.pre('save', function () {
     this.updatedAt = Date.now();
-    if (typeof next === 'function') next();
 });
 
 const LegalCase         = mongoose.model('LegalCase', LegalCaseSchema);
