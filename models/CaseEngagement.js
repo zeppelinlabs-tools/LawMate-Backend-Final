@@ -76,9 +76,8 @@ const CaseEngagementSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
 });
 
-CaseEngagementSchema.pre('save', function (next) {
+CaseEngagementSchema.pre('save', function () {
     this.updatedAt = Date.now();
-    if (typeof next === "function") next();
 });
 
 module.exports = mongoose.model('CaseEngagement', CaseEngagementSchema);
