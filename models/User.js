@@ -73,6 +73,11 @@ const UserSchema = new mongoose.Schema({
 
     yearsExp:            { type: Number, default: 0 },
     consultationFee:     { type: Number, default: 0 },
+    // Cached from the Rating collection, recomputed on every new
+    // submission (see controllers/ratingController.js) — avoids
+    // re-aggregating every time a profile card renders.
+    avgRating:            { type: Number, default: 0 },
+    ratingCount:          { type: Number, default: 0 },
     languages:           { type: [String], default: [] },
     isAvailable:         { type: Boolean, default: true },
     casesHandled:        { type: Number, default: 0 },
