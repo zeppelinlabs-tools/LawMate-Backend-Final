@@ -200,10 +200,28 @@ exports.updateMyNgo = async (req, res) => {
                 console.error('[updateMyNgo] Could not resolve uploaded logo URL:', e.message);
             }
         }
-        if (website)           ngo.website           = website;
-        if (Array.isArray(focusAreas))     ngo.focusAreas     = focusAreas;
-        if (Array.isArray(categories))     ngo.categories     = categories;
-        if (Array.isArray(supportedCities)) ngo.supportedCities = supportedCities;
+        // The Edit Profile sheet sends these as a single comma-separated
+        // string (a plain text field, not a multi-select), not a real
+        // array — the old Array.isArray() check was true for neither the
+        // string the frontend sends nor anything JSON.stringify'd over
+        // multipart form-data (multipart fields always arrive as strings),
+        // so these three fields silently never updated no matter what was
+        // typed into Edit Profile.
+        function toArray(value) {
+            if (Array.isArray(value)) return value.map(v => `${v}`.trim()).filter(Boolean);
+            if (typeof value === 'string' && value.trim()) {
+                return value.split(',').map(v => v.trim()).filter(Boolean);
+            }
+            return null;
+        }
+
+        if (website) ngo.website = website;
+        const focusAreasArr     = toArray(focusAreas);
+        const categoriesArr     = toArray(categories);
+        const supportedCitiesArr = toArray(supportedCities);
+        if (focusAreasArr)      ngo.focusAreas      = focusAreasArr;
+        if (categoriesArr)      ngo.categories      = categoriesArr;
+        if (supportedCitiesArr) ngo.supportedCities = supportedCitiesArr;
 
         await ngo.save();
         res.json({ success: true, ngo });
@@ -1347,6 +1365,21 @@ exports.createNgo = async (req, res) => {
     try {
         const { name, ...rest } = req.body;
         if (!name) return res.status(400).json({ msg: 'NGO name is required.' });
+
+        // Previously nothing stopped this from running twice for the same
+        // account (a double-tap, a retry after a dropped connection, or
+        // reopening the create-NGO form after already having one) — each
+        // call just created another Ngo document tied to the same user,
+        // which is exactly how duplicate listings like "TIRMIZI Welfare"
+        // appearing twice happened.
+        const existing = await Ngo.findOne({ ownerId: req.user.id });
+        if (existing) {
+            return res.status(409).json({
+                msg: 'You already have an NGO profile. Use the Edit Profile option instead of creating a new one.',
+                ngo: existing,
+            });
+        }
+
         const ngo = new Ngo({ name, ...rest, ownerId: req.user.id, isActive: true, isVerified: false });
         await ngo.save();
         // Link to user
