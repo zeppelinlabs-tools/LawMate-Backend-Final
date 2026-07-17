@@ -494,12 +494,53 @@ exports.me = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // 6. GOOGLE SYNC
 // ─────────────────────────────────────────────────────────────
-exports.googleSync = async (req, res) => {
-    const { email, firstName, lastName, picture } = req.body;
-    try {
-        if (!email) return res.status(400).json({ msg: 'Email is required for Google sync.' });
+// ─────────────────────────────────────────────────────────────
+// 6. GOOGLE SIGN-IN — verifies a real Google ID token server-side
+// Previously this trusted email/firstName/lastName/picture straight from
+// the request body with NO verification that they actually came from
+// Google — anyone could POST an arbitrary registered email here and be
+// logged in as that user with no password at all. Now the client sends
+// the ID token Google itself issued (via google_sign_in on the Flutter
+// side), and this verifies it against Google's own public keys before
+// trusting anything in it. Requires GOOGLE_CLIENT_ID in .env — the OAuth
+// client ID from Google Cloud Console for this app (Android + iOS +
+// optionally Web client IDs can all be passed as an array audience).
+// ─────────────────────────────────────────────────────────────
+const { OAuth2Client } = require('google-auth-library');
+const googleClient = new OAuth2Client();
 
-        const user = await User.findOne({ email: email.toLowerCase().trim() });
+exports.googleSync = async (req, res) => {
+    const { idToken } = req.body;
+    try {
+        if (!idToken) return res.status(400).json({ msg: 'idToken is required for Google sign-in.' });
+        if (!process.env.GOOGLE_CLIENT_ID) {
+            console.error('[googleSync] GOOGLE_CLIENT_ID not set in .env — cannot verify Google tokens.');
+            return res.status(500).json({ msg: 'Google sign-in is not configured on the server yet.' });
+        }
+
+        let payload;
+        try {
+            const ticket = await googleClient.verifyIdToken({
+                idToken,
+                audience: process.env.GOOGLE_CLIENT_ID.split(',').map(s => s.trim()),
+            });
+            payload = ticket.getPayload();
+        } catch (verifyErr) {
+            console.error('[googleSync] Token verification failed:', verifyErr.message);
+            return res.status(401).json({ msg: 'Invalid Google sign-in token.' });
+        }
+
+        if (!payload?.email) return res.status(400).json({ msg: 'Google did not return an email for this account.' });
+        if (payload.email_verified === false) {
+            return res.status(401).json({ msg: 'This Google account\'s email is not verified.' });
+        }
+
+        const email     = payload.email.toLowerCase().trim();
+        const firstName = payload.given_name || (payload.name || '').split(' ')[0] || '';
+        const lastName  = payload.family_name || (payload.name || '').split(' ').slice(1).join(' ') || '';
+        const picture   = payload.picture || '';
+
+        const user = await User.findOne({ email });
 
         if (user) {
             const token = signToken(user._id);
@@ -516,12 +557,7 @@ exports.googleSync = async (req, res) => {
             success:         true,
             needsOnboarding: true,
             msg:             'Email not registered. Please complete profile configuration.',
-            googleData: {
-                firstName: (firstName || '').trim(),
-                lastName:  (lastName  || '').trim(),
-                email:     email.toLowerCase().trim(),
-                picture:   (picture   || '').trim()
-            }
+            googleData: { firstName, lastName, email, profilePic: picture }
         });
     } catch (err) {
         return handleSaveError(err, res);
