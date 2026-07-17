@@ -43,6 +43,7 @@ app.use('/api/ngos',                           require('./routes/ngos'));
 app.use('/api/bills',                          require('./routes/bills'));
 app.use('/api/meetings',                       require('./routes/meetings'));
 app.use('/api/engagements',                    require('./routes/engagements'));
+app.use('/api/ratings',                        require('./routes/ratings'));
 app.use('/api/document-vault',                 require('./routes/documentVault'));
 app.use('/api/users/notification-preferences', require('./routes/userPreferences'));
 
@@ -51,6 +52,19 @@ app.use('/documents', express.static(path.join(__dirname, 'uploads', 'documents'
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', msg: 'LawMate API is running' }));
+
+// Landing pages for Safepay's redirect_url/cancel_url — the checkout
+// itself is always inside the app's in-app WebView (see
+// PaymentCheckoutScreen), so a real person is very unlikely to ever
+// actually land on these. They exist so the URLs resolve to something
+// real rather than a 404, in case Safepay's checkout validates that the
+// redirect domain responds before allowing checkout to proceed.
+app.get('/api/payment-success', (req, res) => {
+    res.send('<html><body style="font-family:sans-serif;text-align:center;padding:60px 20px;"><h2>Payment complete</h2><p>You can close this window and return to the LawMate app.</p></body></html>');
+});
+app.get('/api/payment-cancelled', (req, res) => {
+    res.send('<html><body style="font-family:sans-serif;text-align:center;padding:60px 20px;"><h2>Payment cancelled</h2><p>You can close this window and return to the LawMate app.</p></body></html>');
+});
 
 // ── Global error handler ────────────────────────────────────────
 // Must be registered AFTER all routes. Without this, an error thrown
