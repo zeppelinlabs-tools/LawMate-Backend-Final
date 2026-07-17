@@ -66,14 +66,21 @@ const DocumentVaultItemSchema = new mongoose.Schema({
     }
 });
 
-DocumentVaultItemSchema.pre('validate', function (next) {
+// Modern Mongoose (7+) removed the old callback-style `next` parameter
+// for schema hooks — a hook now either runs synchronously with no
+// parameter (throwing to fail validation) or returns a Promise. The
+// previous function(next) {...} form here was calling next() as if it
+// were still a callback; on this Mongoose version it isn't one, so that
+// call threw "next is not a function" internally on every single
+// validation — which is the actual reason every vault upload was
+// failing with a generic "Server error".
+DocumentVaultItemSchema.pre('validate', function () {
     const hasEngagement  = !!this.engagementId;
     const hasApplication = !!this.applicationId;
     if (hasEngagement === hasApplication) {
         // Both set, or neither set — exactly one scope must be provided.
-        return next(new Error('DocumentVaultItem requires exactly one of engagementId or applicationId.'));
+        throw new Error('DocumentVaultItem requires exactly one of engagementId or applicationId.');
     }
-    next();
 });
 
 module.exports = mongoose.model('DocumentVaultItem', DocumentVaultItemSchema);
