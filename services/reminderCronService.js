@@ -12,6 +12,7 @@
 
 const cron           = require('node-cron');
 const CaseEngagement = require('../models/CaseEngagement');
+const Meeting        = require('../models/Meeting');
 const Notification   = require('../models/Notification');
 
 // ── Internal helper: save notification ───────────────────────
@@ -30,7 +31,84 @@ function getProfId(engagement) {
     return engagement.lawyerId || engagement.socialWorkerId || null;
 }
 
-// ── Check upcoming appointments ───────────────────────────────
+// ── Meeting model uses separate date + time fields (unlike
+// CaseEngagement's single appointmentTime) — combine them into one
+// comparable Date. Expects time as "HH:MM" (24-hour), which is what the
+// bill-creation flow already stores.
+function meetingDateTime(meeting) {
+    if (!meeting.date) return null;
+    const d = new Date(meeting.date);
+    const [h, m] = (meeting.time || '00:00').split(':').map(n => parseInt(n, 10));
+    if (!isNaN(h)) d.setHours(h, isNaN(m) ? 0 : m, 0, 0);
+    return d;
+}
+
+// ── Check Meeting reminders (15 min before + at start) and resolve any
+// meeting whose time has passed with no clear mutual outcome yet. ──
+async function checkMeetingReminders() {
+    const now = new Date();
+
+    try {
+        const upcoming = await Meeting.find({ status: 'upcoming' });
+
+        for (const meeting of upcoming) {
+            const startAt = meetingDateTime(meeting);
+            if (!startAt) continue;
+
+            const minutesUntilStart = (startAt.getTime() - now.getTime()) / 60000;
+
+            // 15-minute reminder
+            if (!meeting.reminder15SentAt && minutesUntilStart <= 15 && minutesUntilStart > 14) {
+                await notify(meeting.clientId, `⏰ Reminder: "${meeting.title}" starts in 15 minutes.`);
+                await notify(meeting.lawyerId, `⏰ Reminder: "${meeting.title}" with your client starts in 15 minutes.`);
+                meeting.reminder15SentAt = now;
+                await meeting.save();
+                continue;
+            }
+
+            // Start-time reminder
+            if (!meeting.reminderStartSentAt && minutesUntilStart <= 0 && minutesUntilStart > -1) {
+                await notify(meeting.clientId, `🔴 It's time for your meeting: "${meeting.title}".`);
+                await notify(meeting.lawyerId, `🔴 It's time for your meeting: "${meeting.title}".`);
+                meeting.reminderStartSentAt = now;
+                await meeting.save();
+                continue;
+            }
+
+            // Grace period: 15 minutes after the meeting was due to start,
+            // resolve it based on whatever attendance responses (if any)
+            // came in. A side that never responded at all is "missed" for
+            // them specifically, but since Meeting only has one overall
+            // status, we resolve to 'missed' whenever at least one side
+            // never showed and neither explicitly dismissed it — that's
+            // the "silence" case the status is meant to capture,
+            // distinct from an explicit 'dismissed' decline (handled
+            // immediately in POST /:id/respond, this cron won't see those
+            // since they're already resolved before the grace period).
+            if (minutesUntilStart <= -15) {
+                if (meeting.clientResponse === 'joined' && meeting.professionalResponse === 'joined') {
+                    meeting.status = 'attended';
+                } else {
+                    meeting.status = 'missed';
+                }
+                meeting.resolvedAt = now;
+                await meeting.save();
+
+                await notify(meeting.clientId, `Meeting "${meeting.title}" is now marked as ${meeting.status}.`);
+                await notify(meeting.lawyerId, `Meeting "${meeting.title}" is now marked as ${meeting.status}.`);
+
+                try {
+                    const { emitToRoom } = require('./socketService');
+                    emitToRoom(`engagement:${meeting.engagementId}`, 'meeting:updated', { meeting });
+                } catch (e) { console.error('[REMINDER] Socket emit failed:', e.message); }
+            }
+        }
+    } catch (e) {
+        console.error('[REMINDER] Meeting check error:', e.message);
+    }
+}
+
+
 async function checkReminders() {
     const now = new Date();
 
@@ -89,6 +167,7 @@ async function checkReminders() {
 function startReminderCron() {
     cron.schedule('* * * * *', async () => {
         await checkReminders();
+        await checkMeetingReminders();
     });
     console.log('⏰ Appointment reminder cron started (checks every minute)');
 }
